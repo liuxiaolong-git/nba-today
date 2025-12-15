@@ -32,8 +32,26 @@ st.markdown("""
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
         
-        /* 表格容器 - 水平滚动 */
-        .table-container {
+        /* 简化表格 - 默认只显示三列 */
+        .simple-table {
+            width: 100%;
+            font-size: 13px;
+        }
+        
+        .simple-table th, .simple-table td {
+            padding: 6px 4px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .simple-table th {
+            font-weight: bold;
+            color: #666;
+            background-color: #f8f9fa;
+        }
+        
+        /* 完整表格容器 - 水平滚动 */
+        .full-table-container {
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
             margin: 8px 0;
@@ -41,10 +59,10 @@ st.markdown("""
             border: 1px solid #e0e0e0;
         }
         
-        /* 数据表格优化 */
+        /* 完整表格 */
         .dataframe {
             font-size: 12px !important;
-            min-width: 700px; /* 确保表格有最小宽度 */
+            min-width: 700px;
         }
         
         .dataframe th, .dataframe td {
@@ -85,6 +103,7 @@ st.markdown("""
             border-radius: 10px;
             display: inline-block;
             margin-right: 4px;
+            background-color: #f0f0f0;
         }
         
         /* 球队名称 */
@@ -103,6 +122,14 @@ st.markdown("""
             color: #666;
         }
         
+        /* 展开详细数据按钮 */
+        .detail-btn {
+            font-size: 12px !important;
+            padding: 4px 10px !important;
+            margin: 4px 0 !important;
+            width: auto !important;
+        }
+        
         /* 分隔线 */
         .stDivider {
             margin: 12px 0 !important;
@@ -119,17 +146,6 @@ st.markdown("""
             font-size: 14px !important;
             padding: 8px 0 !important;
         }
-        
-        /* 表格列宽调整 */
-        .dataframe th:nth-child(1) { min-width: 80px; } /* 球员 */
-        .dataframe th:nth-child(2) { min-width: 50px; } /* 时间 */
-        .dataframe th:nth-child(3) { min-width: 40px; } /* 得分 */
-        .dataframe th:nth-child(4) { min-width: 60px; } /* 投篮 */
-        .dataframe th:nth-child(5) { min-width: 60px; } /* 三分 */
-        .dataframe th:nth-child(6) { min-width: 60px; } /* 罚球 */
-        .dataframe th:nth-child(7) { min-width: 40px; } /* 篮板 */
-        .dataframe th:nth-child(8) { min-width: 40px; } /* 助攻 */
-        .dataframe th:nth-child(9) { min-width: 40px; } /* 失误 */
     }
     
     /* 通用优化 */
@@ -140,13 +156,6 @@ st.markdown("""
     /* 直播比赛指示器 */
     .live-game {
         border-left: 4px solid #4CAF50 !important;
-        animation: pulse 2s infinite;
-    }
-    
-    @keyframes pulse {
-        0% { opacity: 1; }
-        50% { opacity: 0.8; }
-        100% { opacity: 1; }
     }
     
     /* 已结束比赛 */
@@ -158,10 +167,21 @@ st.markdown("""
     .upcoming-game {
         border-left: 4px solid #2196F3 !important;
     }
+    
+    /* 得分高亮 */
+    .high-score {
+        font-weight: bold;
+        color: #e53935;
+    }
+    
+    /* 表格列宽调整 */
+    .simple-table th:nth-child(1) { width: 50%; } /* 球员 */
+    .simple-table th:nth-child(2) { width: 25%; } /* 时间 */
+    .simple-table th:nth-child(3) { width: 25%; } /* 得分 */
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏀 NBA实时赛程")
+st.title("🏀 NBA实时赛程(小包子)")
 
 # 初始化 session state
 if 'refresh_count' not in st.session_state:
@@ -169,6 +189,10 @@ if 'refresh_count' not in st.session_state:
     
 if 'untranslated_players' not in st.session_state:
     st.session_state.untranslated_players = set()
+
+# 初始化每个比赛的展开状态
+if 'expanded_games' not in st.session_state:
+    st.session_state.expanded_games = {}
 
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
@@ -446,6 +470,88 @@ def parse_player_stats(game_data):
     except Exception as e:
         return [], []
 
+# ====== 简化的表格显示函数 ======
+def display_simple_table(players_data, team_name):
+    """显示简化的表格（只显示球员、时间、得分）"""
+    if not players_data:
+        st.info("暂无球员数据")
+        return
+    
+    # 按得分排序
+    players_data = sorted(players_data, key=lambda x: safe_int(x['得分'], 0), reverse=True)
+    
+    # 只取前10名球员（移动端节省空间）
+    players_data = players_data[:10]
+    
+    # 创建简化的HTML表格
+    html = f"""
+    <div class="simple-table">
+        <table style="width:100%">
+            <thead>
+                <tr>
+                    <th>球员</th>
+                    <th>时间</th>
+                    <th>得分</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    
+    for player in players_data:
+        score_class = "high-score" if safe_int(player['得分'], 0) >= 20 else ""
+        html += f"""
+            <tr>
+                <td>{player['球员']}</td>
+                <td>{player['时间']}</td>
+                <td class="{score_class}">{player['得分']}</td>
+            </tr>
+        """
+    
+    html += """
+            </tbody>
+        </table>
+    </div>
+    """
+    
+    st.markdown(html, unsafe_allow_html=True)
+
+# ====== 完整的表格显示函数 ======
+def display_full_table(players_data):
+    """显示完整的球员数据表格"""
+    if not players_data:
+        st.info("暂无球员数据")
+        return
+    
+    df = pd.DataFrame(players_data)
+    if not df.empty:
+        # 按得分排序
+        df['得分'] = pd.to_numeric(df['得分'], errors='coerce')
+        df = df.sort_values('得分', ascending=False)
+        df['得分'] = df['得分'].astype(str)
+        
+        # 显示完整表格（支持水平滚动）
+        st.markdown('<div class="full-table-container">', unsafe_allow_html=True)
+        st.dataframe(
+            df,
+            hide_index=True,
+            use_container_width=True,
+            column_order=['球员', '时间', '得分', '投篮', '三分', '罚球', '篮板', '助攻', '失误'],
+            column_config={
+                "球员": st.column_config.TextColumn(width="medium"),
+                "时间": st.column_config.TextColumn(width="small"),
+                "得分": st.column_config.NumberColumn(width="small"),
+                "投篮": st.column_config.TextColumn(width="small"),
+                "三分": st.column_config.TextColumn(width="small"),
+                "罚球": st.column_config.TextColumn(width="small"),
+                "篮板": st.column_config.NumberColumn(width="small"),
+                "助攻": st.column_config.NumberColumn(width="small"),
+                "失误": st.column_config.NumberColumn(width="small")
+            }
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.info("暂无球员数据")
+
 # ====== 移动端优化的Streamlit界面 ======
 # 顶部工具栏 - 移动端友好
 col1, col2 = st.columns([3, 1])
@@ -535,87 +641,82 @@ for i, event in enumerate(events):
     # 状态信息
     st.markdown(f'<span class="status-badge">{status_badge}</span> {desc}', unsafe_allow_html=True)
     
-    # 球员数据 - 使用展开器节省空间
+    # 球员数据 - 默认只显示简化版
     if state in ['in', 'post']:
-        with st.expander("📊 查看球员数据", expanded=False):
-            with st.spinner("加载球员数据..."):
-                game_data = fetch_player_stats(event['id'])
-                if game_data:
-                    away_p, home_p = parse_player_stats(game_data)
+        with st.spinner("加载球员数据..."):
+            game_data = fetch_player_stats(event['id'])
+            if game_data:
+                away_p, home_p = parse_player_stats(game_data)
+                
+                if away_p or home_p:
+                    # 为每个比赛创建唯一的key
+                    game_key = f"game_{event['id']}"
                     
-                    if away_p or home_p:
-                        # 使用标签页切换主客队
-                        tab1, tab2 = st.tabs([f"👤 {away_name}", f"👤 {home_name}"])
-                        
-                        with tab1:
-                            if away_p:
-                                df = pd.DataFrame(away_p)
-                                if not df.empty:
-                                    # 按得分排序
-                                    df['得分'] = pd.to_numeric(df['得分'], errors='coerce')
-                                    df = df.sort_values('得分', ascending=False)
-                                    df['得分'] = df['得分'].astype(str)
-                                    
-                                    # 移动端优化表格显示
-                                    st.markdown('<div class="table-container">', unsafe_allow_html=True)
-                                    st.dataframe(
-                                        df,
-                                        hide_index=True,
-                                        use_container_width=True,
-                                        column_order=['球员', '时间', '得分', '投篮', '三分', '罚球', '篮板', '助攻', '失误'],
-                                        column_config={
-                                            "球员": st.column_config.TextColumn(width="medium"),
-                                            "时间": st.column_config.TextColumn(width="small"),
-                                            "得分": st.column_config.NumberColumn(width="small"),
-                                            "投篮": st.column_config.TextColumn(width="small"),
-                                            "三分": st.column_config.TextColumn(width="small"),
-                                            "罚球": st.column_config.TextColumn(width="small"),
-                                            "篮板": st.column_config.NumberColumn(width="small"),
-                                            "助攻": st.column_config.NumberColumn(width="small"),
-                                            "失误": st.column_config.NumberColumn(width="small")
-                                        }
-                                    )
-                                    st.markdown('</div>', unsafe_allow_html=True)
-                                else:
-                                    st.info("暂无球员数据")
-                            else:
-                                st.info("暂无球员数据")
-                        
-                        with tab2:
-                            if home_p:
-                                df = pd.DataFrame(home_p)
-                                if not df.empty:
-                                    # 按得分排序
-                                    df['得分'] = pd.to_numeric(df['得分'], errors='coerce')
-                                    df = df.sort_values('得分', ascending=False)
-                                    df['得分'] = df['得分'].astype(str)
-                                    
-                                    # 移动端优化表格显示
-                                    st.markdown('<div class="table-container">', unsafe_allow_html=True)
-                                    st.dataframe(
-                                        df,
-                                        hide_index=True,
-                                        use_container_width=True,
-                                        column_order=['球员', '时间', '得分', '投篮', '三分', '罚球', '篮板', '助攻', '失误'],
-                                        column_config={
-                                            "球员": st.column_config.TextColumn(width="medium"),
-                                            "时间": st.column_config.TextColumn(width="small"),
-                                            "得分": st.column_config.NumberColumn(width="small"),
-                                            "投篮": st.column_config.TextColumn(width="small"),
-                                            "三分": st.column_config.TextColumn(width="small"),
-                                            "罚球": st.column_config.TextColumn(width="small"),
-                                            "篮板": st.column_config.NumberColumn(width="small"),
-                                            "助攻": st.column_config.NumberColumn(width="small"),
-                                            "失误": st.column_config.NumberColumn(width="small")
-                                        }
-                                    )
-                                    st.markdown('</div>', unsafe_allow_html=True)
-                                else:
-                                    st.info("暂无球员数据")
-                            else:
-                                st.info("暂无球员数据")
-                    else:
-                        st.info("球员数据暂未更新")
+                    # 初始化展开状态
+                    if game_key not in st.session_state.expanded_games:
+                        st.session_state.expanded_games[game_key] = {
+                            'away_expanded': False,
+                            'home_expanded': False
+                        }
+                    
+                    # 显示球员数据标题
+                    st.markdown("---")
+                    st.markdown("**球员数据**")
+                    
+                    # 使用标签页切换主客队
+                    tab1, tab2 = st.tabs([f"👤 {away_name}", f"👤 {home_name}"])
+                    
+                    with tab1:
+                        if away_p:
+                            # 默认显示简化表格
+                            display_simple_table(away_p, away_name)
+                            
+                            # 展开/收起详细数据按钮
+                            col_btn1, col_btn2 = st.columns([1, 1])
+                            with col_btn1:
+                                if st.button("📊 详细数据", key=f"expand_away_{event['id']}", 
+                                          use_container_width=True, 
+                                          type="secondary" if not st.session_state.expanded_games[game_key]['away_expanded'] else "primary"):
+                                    st.session_state.expanded_games[game_key]['away_expanded'] = not st.session_state.expanded_games[game_key]['away_expanded']
+                            
+                            with col_btn2:
+                                if st.button("📈 得分榜", key=f"score_away_{event['id']}", use_container_width=True):
+                                    # 可以添加得分榜功能
+                                    pass
+                            
+                            # 如果展开，显示完整表格
+                            if st.session_state.expanded_games[game_key]['away_expanded']:
+                                st.markdown("**详细数据**")
+                                display_full_table(away_p)
+                        else:
+                            st.info("暂无球员数据")
+                    
+                    with tab2:
+                        if home_p:
+                            # 默认显示简化表格
+                            display_simple_table(home_p, home_name)
+                            
+                            # 展开/收起详细数据按钮
+                            col_btn1, col_btn2 = st.columns([1, 1])
+                            with col_btn1:
+                                if st.button("📊 详细数据", key=f"expand_home_{event['id']}", 
+                                          use_container_width=True, 
+                                          type="secondary" if not st.session_state.expanded_games[game_key]['home_expanded'] else "primary"):
+                                    st.session_state.expanded_games[game_key]['home_expanded'] = not st.session_state.expanded_games[game_key]['home_expanded']
+                            
+                            with col_btn2:
+                                if st.button("📈 得分榜", key=f"score_home_{event['id']}", use_container_width=True):
+                                    # 可以添加得分榜功能
+                                    pass
+                            
+                            # 如果展开，显示完整表格
+                            if st.session_state.expanded_games[game_key]['home_expanded']:
+                                st.markdown("**详细数据**")
+                                display_full_table(home_p)
+                        else:
+                            st.info("暂无球员数据")
+                else:
+                    st.info("球员数据暂未更新")
     
     st.markdown('</div>', unsafe_allow_html=True)
     

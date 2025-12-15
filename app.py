@@ -9,6 +9,9 @@ st.title("🏀 NBA实时赛程")
 
 if 'refresh_count' not in st.session_state:
     st.session_state.refresh_count = 0
+    
+if 'untranslated_players' not in st.session_state:
+    st.session_state.untranslated_players = set()
 
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
@@ -565,15 +568,113 @@ player_translation = {
     "Zyon Pullin": "齐昂·普林",
     "Alex Toohey": "亚历克斯·图希",
     "Mantas Rubstavicius": "曼塔斯·鲁布斯塔维修斯",
-    "Trentyn Flowers": "特伦廷·弗拉沃斯"
+    "Trentyn Flowers": "特伦廷·弗拉沃斯",
+    # 添加一些常见的格式变体
+    "Tim Hardaway Jr": "小蒂姆·哈达威",
+    "Gary Trent Jr": "小加里·特伦特",
+    "Larry Nance Jr": "小拉里·南斯",
+    "Michael Porter Jr": "小迈克尔·波特",
+    "Kelly Oubre Jr": "小凯利·乌布雷",
+    "Derrick Jones Jr": "小德里克·琼斯",
+    "Andre Jackson Jr": "小安德烈·杰克逊",
+    "Troy Brown Jr": "小特洛伊·布朗",
+    "Charlie Brown Jr": "小查理·布朗",
+    "Wendell Moore Jr": "小温德尔·摩尔",
+    "Vernon Carey Jr": "小弗农·凯里",
+    "Kira Lewis Jr": "小基拉·刘易斯",
+    "Duane Washington Jr": "小杜安·华盛顿",
+    "John Butler Jr": "小约翰·巴特勒",
+    "Scotty Pippen Jr": "小斯科蒂·皮蓬",
+    "Vince Williams Jr": "小文斯·威廉姆斯",
+    "Dereck Lively II": "德里克·利夫利二世",
+    "Marcus Morris Sr": "马库斯·莫里斯",
+    "Robert Williams III": "罗伯特·威廉斯三世",
+    "Greg Brown III": "格雷格·布朗三世",
+    "Trey Murphy III": "特雷·墨菲三世",
+    "Lonnie Walker IV": "朗尼·沃克四世",
+    "AJ Green": "AJ·格林",
+    "RJ Barrett": "RJ·巴雷特",
+    "CJ McCollum": "CJ·麦科勒姆",
+    "PJ Washington": "PJ·华盛顿",
+    "OG Anunoby": "OG·阿努诺比",
+    "TJ McConnell": "T.J.麦康奈尔",
+    "GG Jackson": "GG·杰克逊",
 }
+
+# 添加简化版匹配
+player_translation.update({
+    # 去掉点和空格的简化版
+    "AJ Green": "AJ·格林",
+    "CJ McCollum": "CJ·麦科勒姆",
+    "RJ Barrett": "RJ·巴雷特",
+    "PJ Washington": "PJ·华盛顿",
+    "OG Anunoby": "OG·阿努诺比",
+    "TJ McConnell": "T.J.麦康奈尔",
+    "GG Jackson": "GG·杰克逊",
+    "KJ Martin": "KJ·马丁",
+    "JT Thor": "JT·索尔",
+})
 
 def translate_player_name(name):
     """将英文球员名转为中文，若无则返回原名"""
+    if not name:
+        return name
+    
     name = name.strip()
-    # 处理可能的中间名缩写差异，如 "De'Anthony Melton" vs "Deanthony Melton"
-    # 此处简化处理，实际可加 fuzzy match，但先用精确匹配
-    return player_translation.get(name, name)
+    
+    # 首先尝试完全匹配
+    if name in player_translation:
+        return player_translation[name]
+    
+    # 尝试处理Jr./Sr./II/III/IV等后缀
+    name_parts = name.split()
+    if len(name_parts) > 1:
+        # 定义常见的后缀
+        suffixes = ['Jr.', 'Jr', 'Sr.', 'Sr', 'II', 'III', 'IV', 'V']
+        
+        # 检查最后一个部分是否是后缀
+        if name_parts[-1] in suffixes:
+            base_name = ' '.join(name_parts[:-1])
+            
+            # 尝试匹配基础名称
+            if base_name in player_translation:
+                translated_base = player_translation[base_name]
+                suffix = name_parts[-1]
+                suffix_map = {
+                    'Jr.': '小', 'Jr': '小',
+                    'Sr.': '老', 'Sr': '老',
+                    'II': '二世', 'III': '三世', 'IV': '四世', 'V': '五世'
+                }
+                if suffix in suffix_map:
+                    return f"{translated_base}{suffix_map[suffix]}"
+                return translated_base
+    
+    # 模糊匹配：忽略中间名缩写
+    if '.' in name:
+        # 将 "A.J. Green" 转换为 "AJ Green" 等
+        simple_name = name.replace('.', '').replace(' ', '')
+        for eng_name in player_translation:
+            simple_eng = eng_name.replace('.', '').replace(' ', '')
+            if simple_name.lower() == simple_eng.lower():
+                return player_translation[eng_name]
+    
+    # 部分匹配：检查是否有相似的名字
+    for eng_name, chi_name in player_translation.items():
+        # 忽略大小写比较
+        if eng_name.lower() in name.lower() or name.lower() in eng_name.lower():
+            return chi_name
+    
+    # 尝试匹配不带"小"前缀的中文名
+    if '小' not in name:
+        for eng_name, chi_name in player_translation.items():
+            if chi_name.startswith('小') and eng_name in name:
+                return chi_name
+    
+    # 记录未翻译的名称以便调试
+    if name not in ['DNP', 'N/A', '--', '']:
+        st.session_state.untranslated_players.add(name)
+    
+    return name  # 返回原名
 
 # ====== 其余函数保持不变，仅在 parse_player_stats 中加入翻译 ======
 
@@ -641,10 +742,20 @@ def parse_player_stats(game_data):
             
             parsed = []
             for ath in athletes:
-                name_en = ath.get('athlete', {}).get('displayName', '').strip()
+                # 尝试从多个字段获取球员名
+                athlete_data = ath.get('athlete', {})
+                name_en = (athlete_data.get('displayName', '') or 
+                          athlete_data.get('fullName', '') or 
+                          athlete_data.get('shortName', '') or 
+                          ath.get('displayName', ''))
+                
+                name_en = name_en.strip()
+                if not name_en or name_en == 'DNP':
+                    continue
+
                 name_cn = translate_player_name(name_en)  # <<< 关键：翻译球员名
                 raw_vals = ath.get('stats', [])
-                if not name_en or not raw_vals:
+                if not raw_vals:
                     continue
 
                 stat_map = {}
@@ -656,8 +767,13 @@ def parse_player_stats(game_data):
                     s = str(s).replace('/', '-').strip()
                     if '-' in s:
                         parts = s.split('-')
-                        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                            return parts[0], parts[1]
+                        if len(parts) == 2:
+                            # 确保是数字
+                            try:
+                                int(parts[0]), int(parts[1])
+                                return parts[0], parts[1]
+                            except:
+                                pass
                     return '0', '0'
 
                 fgm, fga = parse_shot(stat_map.get('FGM-A', stat_map.get('FG', '0-0')))
@@ -793,4 +909,9 @@ if col2.button("🔄 刷新"):
     st.cache_data.clear()
     st.rerun()
 
-
+# 显示未翻译的球员名
+if st.session_state.untranslated_players:
+    with st.expander("⚠️ 未翻译球员名（需要添加到映射表）"):
+        st.write("以下球员名未找到翻译，请添加到 `player_translation` 字典中：")
+        for player in sorted(st.session_state.untranslated_players):
+            st.text(f'"{player}": "",')

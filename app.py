@@ -95,268 +95,83 @@ def fetch_player_stats(event_id):
     except Exception as e:
         return None
 
-def parse_player_stats(game_data):
-    """解析球员统计数据 - 修复版"""
+def format_time(time_str):
+    """格式化时间显示"""
+    if not time_str or time_str == '0':
+        return '0:00'
+    time_str = str(time_str)
+    if ':' in time_str:
+        return time_str
     try:
-        # 从boxscore中获取球员数据
+        minutes = int(float(time_str))
+        return f"{minutes}:00"
+    except:
+        return time_str
+
+def parse_player_stats(game_data):
+    """解析球员统计数据（使用正确的ESPN stats索引）"""
+    try:
         boxscore = game_data.get('boxscore', {})
         players = boxscore.get('players', [])
         
         if len(players) < 2:
             return [], []
         
-        away_players_data = []
-        home_players_data = []
-        
-        # 根据ESPN API，players[0]是主队，players[1]是客队
+        # ESPN: players[0] = 主队(home), players[1] = 客队(away)
         home_team_players = players[0].get('statistics', [{}])[0].get('athletes', [])
         away_team_players = players[1].get('statistics', [{}])[0].get('athletes', [])
         
-        # 处理主队球员
-        for player in home_team_players:
+        def extract_player_info(player):
             athlete = player.get('athlete', {})
             stats = player.get('stats', [])
-            if athlete and stats:
-                player_name = athlete.get('displayName', '')
-                
-                # 调试：打印球员的stats数组
-                # print(f"主队球员 {player_name} stats: {stats}")
-                
-                # 获取所有统计分类
-                categories = player.get('categories', [])
-                
-                # 初始化统计值
-                fgm, fga, three_pm, three_pa, pts, reb, ast, to, min = '0', '0', '0', '0', '0', '0', '0', '0', '0'
-                
-                # 遍历分类获取数据
-                for category in categories:
-                    category_name = category.get('name', '')
-                    category_stats = category.get('stats', [])
-                    
-                    if category_name == 'fieldGoals' and len(category_stats) >= 2:
-                        # 投篮：前两个是命中数和出手数
-                        fgm = str(category_stats[0])
-                        fga = str(category_stats[1])
-                    elif category_name == 'threePointFieldGoals' and len(category_stats) >= 2:
-                        # 三分：前两个是命中数和出手数
-                        three_pm = str(category_stats[0])
-                        three_pa = str(category_stats[1])
-                    elif category_name == 'freeThrows' and len(category_stats) >= 2:
-                        # 罚球：前两个是命中数和出手数
-                        pass  # 不需要罚球数据
-                    elif category_name == 'rebounds' and len(category_stats) >= 1:
-                        # 篮板
-                        reb = str(category_stats[0])
-                    elif category_name == 'assists' and len(category_stats) >= 1:
-                        # 助攻
-                        ast = str(category_stats[0])
-                    elif category_name == 'turnovers' and len(category_stats) >= 1:
-                        # 失误
-                        to = str(category_stats[0])
-                    elif category_name == 'minutes' and len(category_stats) >= 1:
-                        # 出场时间
-                        min = format_time(str(category_stats[0]))
-                
-                # 尝试从stats数组中获取得分
-                if len(stats) > 0:
-                    # 得分通常是stats数组的最后一个元素
-                    pts = str(stats[-1]) if len(stats) > 0 else '0'
-                    # 或者尝试查找包含"PTS"的显示名称
-                    for stat_item in stats:
-                        if isinstance(stat_item, dict) and stat_item.get('displayName') == 'PTS':
-                            pts = str(stat_item.get('value', '0'))
-                            break
-                
-                # 如果从categories没获取到时间，从stats数组获取
-                if min == '0:00' and len(stats) > 0:
-                    # 时间通常是第一个元素
-                    min = format_time(str(stats[0]))
-                
-                player_info = {
-                    '球员': player_name,
-                    '出场时间': min,
-                    '得分': pts,
-                    '投篮': f"{fgm}/{fga}",
-                    '三分': f"{three_pm}/{three_pa}",
-                    '助攻': ast,
-                    '篮板': reb,
-                    '失误': to
-                }
-                home_players_data.append(player_info)
+            # 至少需要14项基础统计
+            if not athlete or len(stats) < 14:
+                return None
+            
+            name = athlete.get('displayName', '')
+            # 正确索引（参考ESPN实际返回）
+            time_played = format_time(stats[0])   # MIN
+            points      = str(stats[1])           # PTS
+            rebounds    = str(stats[2])           # REB
+            assists     = str(stats[3])           # AST
+            turnovers   = str(stats[6])           # TO
+            fgm         = str(stats[8])           # FGM
+            fga         = str(stats[9])           # FGA
+            three_pm    = str(stats[10])          # 3PM
+            three_pa    = str(stats[11])          # 3PA
+            
+            return {
+                '球员': name,
+                '出场时间': time_played,
+                '得分': points,
+                '投篮': f"{fgm}/{fga}",
+                '三分': f"{three_pm}/{three_pa}",
+                '助攻': assists,
+                '篮板': rebounds,
+                '失误': turnovers
+            }
         
-        # 处理客队球员
-        for player in away_team_players:
-            athlete = player.get('athlete', {})
-            stats = player.get('stats', [])
-            if athlete and stats:
-                player_name = athlete.get('displayName', '')
-                
-                # 获取所有统计分类
-                categories = player.get('categories', [])
-                
-                # 初始化统计值
-                fgm, fga, three_pm, three_pa, pts, reb, ast, to, min = '0', '0', '0', '0', '0', '0', '0', '0', '0'
-                
-                # 遍历分类获取数据
-                for category in categories:
-                    category_name = category.get('name', '')
-                    category_stats = category.get('stats', [])
-                    
-                    if category_name == 'fieldGoals' and len(category_stats) >= 2:
-                        fgm = str(category_stats[0])
-                        fga = str(category_stats[1])
-                    elif category_name == 'threePointFieldGoals' and len(category_stats) >= 2:
-                        three_pm = str(category_stats[0])
-                        three_pa = str(category_stats[1])
-                    elif category_name == 'rebounds' and len(category_stats) >= 1:
-                        reb = str(category_stats[0])
-                    elif category_name == 'assists' and len(category_stats) >= 1:
-                        ast = str(category_stats[0])
-                    elif category_name == 'turnovers' and len(category_stats) >= 1:
-                        to = str(category_stats[0])
-                    elif category_name == 'minutes' and len(category_stats) >= 1:
-                        min = format_time(str(category_stats[0]))
-                
-                # 尝试从stats数组中获取得分
-                if len(stats) > 0:
-                    pts = str(stats[-1]) if len(stats) > 0 else '0'
-                    for stat_item in stats:
-                        if isinstance(stat_item, dict) and stat_item.get('displayName') == 'PTS':
-                            pts = str(stat_item.get('value', '0'))
-                            break
-                
-                # 如果从categories没获取到时间，从stats数组获取
-                if min == '0:00' and len(stats) > 0:
-                    min = format_time(str(stats[0]))
-                
-                player_info = {
-                    '球员': player_name,
-                    '出场时间': min,
-                    '得分': pts,
-                    '投篮': f"{fgm}/{fga}",
-                    '三分': f"{three_pm}/{three_pa}",
-                    '助攻': ast,
-                    '篮板': reb,
-                    '失误': to
-                }
-                away_players_data.append(player_info)
+        home_players_data = []
+        away_players_data = []
         
+        for p in home_team_players:
+            info = extract_player_info(p)
+            if info:
+                home_players_data.append(info)
+                
+        for p in away_team_players:
+            info = extract_player_info(p)
+            if info:
+                away_players_data.append(info)
+                
         return away_players_data, home_players_data
-    except Exception as e:
-        # 如果上述方法失败，尝试备用方法
-        try:
-            # 备用方法：直接从stats数组中解析
-            if len(players) >= 2:
-                home_team_players = players[0].get('statistics', [{}])[0].get('athletes', [])
-                away_team_players = players[1].get('statistics', [{}])[0].get('athletes', [])
-                
-                home_players_data = []
-                away_players_data = []
-                
-                # 处理主队球员
-                for player in home_team_players:
-                    athlete = player.get('athlete', {})
-                    stats = player.get('stats', [])
-                    if athlete and stats:
-                        player_name = athlete.get('displayName', '')
-                        
-                        # 假设stats数组的顺序是标准NBA统计顺序
-                        # 常见顺序：MIN, FGM, FGA, FG3M, FG3A, FTM, FTA, OREB, DREB, REB, AST, STL, BLK, TO, PF, PTS
-                        if len(stats) >= 16:
-                            min = format_time(str(stats[0]))
-                            fgm = str(stats[1])
-                            fga = str(stats[2])
-                            three_pm = str(stats[3])
-                            three_pa = str(stats[4])
-                            reb = str(stats[9])  # 总篮板
-                            ast = str(stats[10])  # 助攻
-                            to = str(stats[13])  # 失误
-                            pts = str(stats[15])  # 得分
-                        elif len(stats) >= 9:
-                            # 简化的顺序
-                            min = format_time(str(stats[0]))
-                            pts = str(stats[1]) if len(stats) > 1 else '0'
-                            fgm = str(stats[2]) if len(stats) > 2 else '0'
-                            fga = str(stats[3]) if len(stats) > 3 else '0'
-                            three_pm = str(stats[4]) if len(stats) > 4 else '0'
-                            three_pa = str(stats[5]) if len(stats) > 5 else '0'
-                            reb = str(stats[6]) if len(stats) > 6 else '0'
-                            ast = str(stats[7]) if len(stats) > 7 else '0'
-                            to = str(stats[8]) if len(stats) > 8 else '0'
-                        else:
-                            continue
-                        
-                        player_info = {
-                            '球员': player_name,
-                            '出场时间': min,
-                            '得分': pts,
-                            '投篮': f"{fgm}/{fga}",
-                            '三分': f"{three_pm}/{three_pa}",
-                            '助攻': ast,
-                            '篮板': reb,
-                            '失误': to
-                        }
-                        home_players_data.append(player_info)
-                
-                # 处理客队球员
-                for player in away_team_players:
-                    athlete = player.get('athlete', {})
-                    stats = player.get('stats', [])
-                    if athlete and stats:
-                        player_name = athlete.get('displayName', '')
-                        
-                        if len(stats) >= 16:
-                            min = format_time(str(stats[0]))
-                            fgm = str(stats[1])
-                            fga = str(stats[2])
-                            three_pm = str(stats[3])
-                            three_pa = str(stats[4])
-                            reb = str(stats[9])
-                            ast = str(stats[10])
-                            to = str(stats[13])
-                            pts = str(stats[15])
-                        elif len(stats) >= 9:
-                            min = format_time(str(stats[0]))
-                            pts = str(stats[1]) if len(stats) > 1 else '0'
-                            fgm = str(stats[2]) if len(stats) > 2 else '0'
-                            fga = str(stats[3]) if len(stats) > 3 else '0'
-                            three_pm = str(stats[4]) if len(stats) > 4 else '0'
-                            three_pa = str(stats[5]) if len(stats) > 5 else '0'
-                            reb = str(stats[6]) if len(stats) > 6 else '0'
-                            ast = str(stats[7]) if len(stats) > 7 else '0'
-                            to = str(stats[8]) if len(stats) > 8 else '0'
-                        else:
-                            continue
-                        
-                        player_info = {
-                            '球员': player_name,
-                            '出场时间': min,
-                            '得分': pts,
-                            '投篮': f"{fgm}/{fga}",
-                            '三分': f"{three_pm}/{three_pa}",
-                            '助攻': ast,
-                            '篮板': reb,
-                            '失误': to
-                        }
-                        away_players_data.append(player_info)
-                
-                return away_players_data, home_players_data
-        except Exception as e2:
-            pass
         
+    except Exception as e:
+        if 'debug_info' not in st.session_state:
+            st.session_state.debug_info = []
+        error_info = f"解析球员数据错误: {str(e)}"
+        st.session_state.debug_info.append(error_info)
         return [], []
-
-def format_time(time_str):
-    """格式化时间显示"""
-    if not time_str:
-        return '0:00'
-    if ':' in str(time_str):
-        return str(time_str)
-    try:
-        minutes = int(time_str)
-        return f"{minutes}:00"
-    except:
-        return str(time_str)
 
 # 侧边栏配置
 with st.sidebar:
@@ -392,7 +207,6 @@ for i, event in enumerate(events):
     status_detail = status.get('type', {}).get('state', 'pre')
     status_desc = status.get('type', {}).get('description', '未开始')
 
-    # 比赛状态
     if status_detail == 'in':
         status_badge = "🟢 进行中"
     elif status_detail == 'post':
@@ -400,7 +214,6 @@ for i, event in enumerate(events):
     else:
         status_badge = "⏳ 未开始"
 
-    # 比赛时间
     date_str = event.get('date', '')
     if date_str:
         try:
@@ -412,89 +225,80 @@ for i, event in enumerate(events):
     else:
         game_time = "时间待定"
 
-    # 参赛队伍
     competitions = event.get('competitions', [])
-    if competitions:
-        competition = competitions[0]
-        competitors = competition.get('competitors', [])
+    if not competitions:
+        continue
+    competition = competitions[0]
+    competitors = competition.get('competitors', [])
 
-        if len(competitors) >= 2:
-            away_team = competitors[0].get('team', {})
-            home_team = competitors[1].get('team', {})
+    if len(competitors) < 2:
+        continue
 
-            away_name_cn = translate_team_name(away_team.get('displayName', '客队'))
-            home_name_cn = translate_team_name(home_team.get('displayName', '主队'))
+    # 注意：ESPN 中 competitors[0] 是客队，[1] 是主队
+    away_team = competitors[0].get('team', {})
+    home_team = competitors[1].get('team', {})
 
-            away_score = competitors[0].get('score', '0')
-            home_score = competitors[1].get('score', '0')
+    away_name_cn = translate_team_name(away_team.get('displayName', '客队'))
+    home_name_cn = translate_team_name(home_team.get('displayName', '主队'))
 
-            # 创建比赛卡片
-            with st.container():
-                # 比分卡片
-                score_col1, score_col2, score_col3, score_col4, score_col5 = st.columns([2, 1, 0.5, 1, 2])
+    away_score = competitors[0].get('score', '0')
+    home_score = competitors[1].get('score', '0')
 
-                with score_col1:
-                    st.markdown(f"**{away_name_cn}**")
-                with score_col2:
-                    st.markdown(f"**{away_score}**")
-                with score_col3:
-                    st.markdown("**VS**")
-                with score_col4:
-                    st.markdown(f"**{home_score}**")
-                with score_col5:
-                    st.markdown(f"**{home_name_cn}**")
+    with st.container():
+        score_col1, score_col2, score_col3, score_col4, score_col5 = st.columns([2, 1, 0.5, 1, 2])
+        with score_col1:
+            st.markdown(f"**{away_name_cn}**")
+        with score_col2:
+            st.markdown(f"**{away_score}**")
+        with score_col3:
+            st.markdown("**VS**")
+        with score_col4:
+            st.markdown(f"**{home_score}**")
+        with score_col5:
+            st.markdown(f"**{home_name_cn}**")
 
-                # 比赛信息
-                st.caption(f"{status_badge} | {status_desc} | ⏰ {game_time}")
+        st.caption(f"{status_badge} | {status_desc} | ⏰ {game_time}")
 
-                # 显示球员数据（针对已结束或进行中的比赛）
-                if status_detail in ['in', 'post']:
-                    with st.spinner("正在获取球员数据..."):
-                        game_data = fetch_player_stats(event_id)
-                        if game_data:
-                            away_players, home_players = parse_player_stats(game_data)
-                            
-                            if away_players or home_players:
-                                st.subheader("📊 球员数据")
-                                
-                                col1, col2 = st.columns(2)
-                                
-                                with col1:
-                                    st.markdown(f"**{away_name_cn}**")
-                                    if away_players:
-                                        away_df = pd.DataFrame(away_players)
-                                        # 按得分排序
-                                        away_df['得分_int'] = pd.to_numeric(away_df['得分'], errors='coerce')
-                                        away_df = away_df.sort_values('得分_int', ascending=False).drop('得分_int', axis=1)
-                                        st.dataframe(
-                                            away_df,
-                                            hide_index=True,
-                                            use_container_width=True,
-                                            height=min(300, len(away_players) * 35 + 38)
-                                        )
-                                    else:
-                                        st.info("暂无球员数据")
-                                
-                                with col2:
-                                    st.markdown(f"**{home_name_cn}**")
-                                    if home_players:
-                                        home_df = pd.DataFrame(home_players)
-                                        home_df['得分_int'] = pd.to_numeric(home_df['得分'], errors='coerce')
-                                        home_df = home_df.sort_values('得分_int', ascending=False).drop('得分_int', axis=1)
-                                        st.dataframe(
-                                            home_df,
-                                            hide_index=True,
-                                            use_container_width=True,
-                                            height=min(300, len(home_players) * 35 + 38)
-                                        )
-                                    else:
-                                        st.info("暂无球员数据")
+        if status_detail in ['in', 'post']:
+            with st.spinner("正在获取球员数据..."):
+                game_data = fetch_player_stats(event_id)
+                if game_data:
+                    away_players, home_players = parse_player_stats(game_data)
+                    
+                    if away_players or home_players:
+                        st.subheader("📊 球员数据")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown(f"**{away_name_cn}**")
+                            if away_players:
+                                df = pd.DataFrame(away_players)
+                                df['得分_int'] = pd.to_numeric(df['得分'], errors='coerce')
+                                df = df.sort_values('得分_int', ascending=False).drop('得分_int', axis=1)
+                                st.dataframe(df, hide_index=True, use_container_width=True,
+                                            height=min(300, len(away_players) * 35 + 38))
                             else:
-                                st.warning("暂无球员数据")
-                        else:
-                            st.warning("无法获取球员数据")
+                                st.info("暂无球员数据")
+                                
+                        with col2:
+                            st.markdown(f"**{home_name_cn}**")
+                            if home_players:
+                                df = pd.DataFrame(home_players)
+                                df['得分_int'] = pd.to_numeric(df['得分'], errors='coerce')
+                                df = df.sort_values('得分_int', ascending=False).drop('得分_int', axis=1)
+                                st.dataframe(df, hide_index=True, use_container_width=True,
+                                            height=min(300, len(home_players) * 35 + 38))
+                            else:
+                                st.info("暂无球员数据")
+                    else:
+                        st.warning("暂无球员数据")
+                        if 'debug_info' in st.session_state and st.session_state.debug_info:
+                            with st.expander("查看调试信息"):
+                                for info in st.session_state.debug_info:
+                                    st.text(info)
+                else:
+                    st.warning("无法获取球员数据")
 
-    # 比赛之间的分隔线
     if i < len(events) - 1:
         st.divider()
 

@@ -1,17 +1,3 @@
-import streamlit as st
-import requests
-import pandas as pd
-import pytz
-from datetime import datetime, timedelta
-
-st.set_page_config(page_title="NBA赛程查询", page_icon="🏀", layout="wide")
-st.title("🏀 NBA实时赛程")
-
-if 'refresh_count' not in st.session_state:
-    st.session_state.refresh_count = 0
-
-beijing_tz = pytz.timezone('Asia/Shanghai')
-now_beijing = datetime.now(beijing_tz)
 
 # ====== 球队中英文映射 ======
 team_translation = {
@@ -639,19 +625,6 @@ player_translation = {
 "Yang Hansen": "杨瀚森"
 }
 
-# 添加简化版匹配
-player_translation.update({
-    # 去掉点和空格的简化版
-    "AJ Green": "AJ·格林",
-    "CJ McCollum": "CJ·麦科勒姆",
-    "RJ Barrett": "RJ·巴雷特",
-    "PJ Washington": "PJ·华盛顿",
-    "OG Anunoby": "OG·阿努诺比",
-    "TJ McConnell": "T.J.麦康奈尔",
-    "GG Jackson": "GG·杰克逊",
-    "KJ Martin": "KJ·马丁",
-    "JT Thor": "JT·索尔",
-})
 
 def translate_player_name(name):
     """将英文球员名转为中文，若无则返回原名"""
@@ -714,8 +687,7 @@ def translate_player_name(name):
     
     return name  # 返回原名
 
-# ====== 其余函数保持不变，仅在 parse_player_stats 中加入翻译 ======
-
+# ====== API 数据获取函数 ======
 @st.cache_data(ttl=30)
 def fetch_nba_schedule(date_str):
     try:
@@ -735,21 +707,26 @@ def fetch_nba_schedule(date_str):
 @st.cache_data(ttl=30)
 def fetch_player_stats(event_id):
     try:
+        # 尝试第一个API端点
         url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
         resp = requests.get(url, params={'event': event_id}, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         if resp.status_code == 200:
             data = resp.json()
             if data.get('boxscore') and data.get('boxscore').get('players'):
                 return data
+        
+        # 如果第一个失败，尝试第二个API端点
         url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/boxscore?event={event_id}"
         resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         if resp.status_code == 200:
             return resp.json()
+            
+        return None
     except Exception as e:
-        st.session_state.debug = str(e)
         return None
 
 def format_time(t):
+    """格式化时间"""
     if not t or str(t).strip() in ('0', '0:00', '--', '', 'DNP', 'N/A'):
         return '0:00'
     s = str(t).strip()
@@ -761,96 +738,186 @@ def format_time(t):
     except:
         return s
 
-def parse_player_stats(game_data):
+def safe_int(value, default=0):
+    """安全地将值转换为整数"""
+    if not value:
+        return default
     try:
+        # 处理 "5/10" 这样的投篮数据
+        if '/' in str(value):
+            return int(str(value).split('/')[0])
+        # 处理纯数字
+        return int(float(str(value)))
+    except:
+        return default
+
+def parse_player_stats(game_data):
+    """解析球员统计数据"""
+    try:
+        if not game_data or 'boxscore' not in game_data:
+            return [], []
+            
         players_section = game_data.get('boxscore', {}).get('players', [])
         if not players_section or len(players_section) < 2:
             return [], []
 
-        home_players = players_section[1]
-        away_players = players_section[0]
+        # 尝试按索引获取主客场球员数据
+        home_players = None
+        away_players = None
+        
+        # 首先尝试通过索引获取
+        if len(players_section) >= 2:
+            away_players = players_section[0]
+            home_players = players_section[1]
+        else:
+            # 如果只有一组数据，可能是不同的结构
+            return [], []
 
         def extract_team_data(team_data):
+            """提取单个球队的球员数据"""
+            if not team_data:
+                return []
+                
             stats_list = team_data.get('statistics', [])
             if not stats_list:
                 return []
-            main_stat = stats_list[0]
+                
+            # 查找主要统计项（通常第一个是球员统计）
+            main_stat = None
+            for stat in stats_list:
+                athletes = stat.get('athletes', [])
+                labels = stat.get('labels', [])
+                if athletes and ('PTS' in labels or '得分' in labels):
+                    main_stat = stat
+                    break
+            
+            if not main_stat:
+                return []
+                
             labels = main_stat.get('labels', [])
             athletes = main_stat.get('athletes', [])
             
             parsed = []
             for ath in athletes:
-                # 获取球员名
-                athlete_data = ath.get('athlete', {})
-                name_en = (athlete_data.get('displayName', '') or 
-                          athlete_data.get('fullName', '') or 
-                          athlete_data.get('shortName', '') or 
-                          ath.get('displayName', ''))
-                
-                name_en = name_en.strip()
-                if not name_en or name_en == 'DNP':
+                try:
+                    # 获取球员名
+                    athlete_data = ath.get('athlete', {})
+                    name_en = (athlete_data.get('displayName', '') or 
+                              athlete_data.get('fullName', '') or 
+                              athlete_data.get('shortName', '') or 
+                              ath.get('displayName', '') or 
+                              ath.get('name', ''))
+                    
+                    name_en = str(name_en).strip()
+                    if not name_en or name_en in ['DNP', 'N/A', '--', 'null', 'None', 'DID NOT PLAY', 'NOT AVAILABLE']:
+                        continue
+                    
+                    # 翻译球员名
+                    name_cn = translate_player_name(name_en)
+                    
+                    raw_vals = ath.get('stats', [])
+                    if not raw_vals:
+                        continue
+                    
+                    # 创建统计映射
+                    stat_map = {}
+                    for i, label in enumerate(labels):
+                        if i < len(raw_vals):
+                            value = raw_vals[i]
+                            if isinstance(value, (int, float)):
+                                value = str(value)
+                            elif value is None:
+                                value = ''
+                            else:
+                                value = str(value).strip()
+                            stat_map[label] = value
+                    
+                    # 安全地获取各项数据
+                    def get_shot_value(key, default='0-0'):
+                        value = stat_map.get(key, default)
+                        if not value:
+                            value = default
+                        return str(value)
+                    
+                    def get_stat_value(key, default='0'):
+                        value = stat_map.get(key, default)
+                        if not value:
+                            value = default
+                        return str(value)
+                    
+                    # 解析投篮数据
+                    fg_str = get_shot_value('FG', '0-0').replace('/', '-')
+                    three_str = get_shot_value('3PT', '0-0').replace('/', '-')
+                    ft_str = get_shot_value('FT', '0-0').replace('/', '-')
+                    
+                    # 分割投篮数据
+                    fg_parts = fg_str.split('-') if '-' in fg_str else ('0', '0')
+                    three_parts = three_str.split('-') if '-' in three_str else ('0', '0')
+                    ft_parts = ft_str.split('-') if '-' in ft_str else ('0', '0')
+                    
+                    fgm = fg_parts[0] if len(fg_parts) >= 1 else '0'
+                    fga = fg_parts[1] if len(fg_parts) >= 2 else '0'
+                    threepm = three_parts[0] if len(three_parts) >= 1 else '0'
+                    threepa = three_parts[1] if len(three_parts) >= 2 else '0'
+                    ftm = ft_parts[0] if len(ft_parts) >= 1 else '0'
+                    fta = ft_parts[1] if len(ft_parts) >= 2 else '0'
+                    
+                    # 确保数字有效性
+                    def safe_num(val):
+                        try:
+                            num = float(val)
+                            return str(int(num)) if num.is_integer() else str(round(num, 1))
+                        except:
+                            return '0'
+                    
+                    # 获取其他统计
+                    minutes = format_time(stat_map.get('MIN', '0'))
+                    pts = safe_num(get_stat_value('PTS', '0'))
+                    reb = safe_num(get_stat_value('REB', '0'))
+                    ast = safe_num(get_stat_value('AST', '0'))
+                    tov = safe_num(get_stat_value('TO', '0'))
+                    
+                    # 创建球员数据字典
+                    player_data = {
+                        '球员': name_cn,
+                        '时间': minutes,
+                        '得分': pts,
+                        '投篮': f"{fgm}/{fga}",
+                        '三分': f"{threepm}/{threepa}",
+                        '罚球': f"{ftm}/{fta}",
+                        '篮板': reb,
+                        '助攻': ast,
+                        '失误': tov
+                    }
+                    
+                    # 只添加有数据的球员（至少得分、篮板、助攻或时间不为0）
+                    has_data = False
+                    if (safe_int(pts) > 0 or safe_int(reb) > 0 or safe_int(ast) > 0 or 
+                        safe_int(fgm) > 0 or safe_int(threepm) > 0 or safe_int(ftm) > 0):
+                        has_data = True
+                    
+                    # 检查上场时间是否大于0
+                    if minutes != '0:00' and minutes != '0':
+                        has_data = True
+                    
+                    if has_data:
+                        parsed.append(player_data)
+                        
+                except Exception as e:
+                    # 跳过单个球员的错误
                     continue
-
-                name_cn = translate_player_name(name_en)
-                raw_vals = ath.get('stats', [])
-                if not raw_vals:
-                    continue
-
-                # 构建标签到值的映射
-                stat_map = {}
-                for i, label in enumerate(labels):
-                    if i < len(raw_vals):
-                        stat_map[label] = raw_vals[i]
-
-                # 解析投篮数据
-                def parse_shot(s):
-                    s = str(s).replace('/', '-').strip()
-                    if '-' in s:
-                        parts = s.split('-')
-                        if len(parts) == 2:
-                            try:
-                                int(parts[0]), int(parts[1])
-                                return parts[0], parts[1]
-                            except:
-                                pass
-                    return '0', '0'
-
-                fgm, fga = parse_shot(stat_map.get('FGM-A', stat_map.get('FG', '0-0')))
-                threepm, threepa = parse_shot(stat_map.get('3PM-A', stat_map.get('3PT', '0-0')))
-                ftm, fta = parse_shot(stat_map.get('FTM-A', stat_map.get('FT', '0-0')))
-
-                def get_num(key, default='0'):
-                    val = stat_map.get(key, default)
-                    return str(val) if str(val).replace('.', '').isdigit() else default
-
-                minutes = stat_map.get('MIN', '0')
-                pts = get_num('PTS')
-                reb = get_num('REB')
-                ast = get_num('AST')
-                tov = get_num('TO')
-
-                parsed.append({
-                    '球员': name_cn,
-                    '时间': format_time(minutes),
-                    '得分': pts,
-                    '投篮': f"{fgm}/{fga}",
-                    '三分': f"{threepm}/{threepa}",
-                    '罚球': f"{ftm}/{fta}",
-                    '篮板': reb,
-                    '助攻': ast,
-                    '失误': tov
-                })
+            
             return parsed
 
-        home_data = extract_team_data(home_players)
         away_data = extract_team_data(away_players)
+        home_data = extract_team_data(home_players)
 
         return away_data, home_data
 
     except Exception as e:
-        st.session_state.debug = f"Parse error: {str(e)}"
         return [], []
 
+# ====== Streamlit 界面 ======
 # Sidebar
 with st.sidebar:
     st.header("⚙️ 查询设置")
@@ -860,6 +927,10 @@ with st.sidebar:
         min_value=now_beijing.date() - timedelta(days=3),
         max_value=now_beijing.date() + timedelta(days=3)
     )
+    
+    if st.button("🧹 清除缓存"):
+        st.cache_data.clear()
+        st.success("缓存已清除")
 
 # Main
 st.subheader(f"📅 {selected_date.strftime('%Y-%m-%d')} 赛程")
@@ -868,7 +939,7 @@ with st.spinner("加载赛程..."):
     schedule = fetch_nba_schedule(selected_date.strftime('%Y-%m-%d'))
 
 if not schedule or 'events' not in schedule:
-    st.error("无法获取数据")
+    st.error("无法获取数据，请稍后重试")
     st.stop()
 
 events = schedule['events']
@@ -901,6 +972,7 @@ for i, event in enumerate(events):
     except:
         bj_time = "时间待定"
 
+    # 显示比赛信息
     cols = st.columns([2, 1, 0.5, 1, 2])
     cols[0].markdown(f"**{away_name}**")
     cols[1].markdown(f"**{away_score}**")
@@ -909,42 +981,61 @@ for i, event in enumerate(events):
     cols[4].markdown(f"**{home_name}**")
     st.caption(f"{badge} | {desc} | ⏰ {bj_time}")
 
+    # 如果比赛进行中或已结束，显示球员数据
     if state in ['in', 'post']:
-        with st.spinner("加载球员数据..."):
+        with st.spinner(f"加载{away_name} vs {home_name}的球员数据..."):
             game_data = fetch_player_stats(event['id'])
             if game_data:
                 away_p, home_p = parse_player_stats(game_data)
+                
+                # 只显示有数据的比赛
                 if away_p or home_p:
                     st.subheader("📊 球员数据")
                     c1, c2 = st.columns(2)
+                    
                     with c1:
                         st.markdown(f"**{away_name}**")
                         if away_p:
                             df = pd.DataFrame(away_p)
-                            df['pts'] = pd.to_numeric(df['得分'], errors='coerce')
-                            df = df.sort_values('pts', ascending=False).drop('pts', axis=1)
-                            st.dataframe(df, hide_index=True, use_container_width=True)
+                            if not df.empty:
+                                # 按得分排序
+                                df['得分'] = pd.to_numeric(df['得分'], errors='coerce')
+                                df = df.sort_values('得分', ascending=False)
+                                df['得分'] = df['得分'].astype(str)
+                                st.dataframe(df, hide_index=True, use_container_width=True)
+                            else:
+                                st.info("暂无球员数据")
                         else:
-                            st.info("无数据")
+                            st.info("暂无球员数据")
+                    
                     with c2:
                         st.markdown(f"**{home_name}**")
                         if home_p:
                             df = pd.DataFrame(home_p)
-                            df['pts'] = pd.to_numeric(df['得分'], errors='coerce')
-                            df = df.sort_values('pts', ascending=False).drop('pts', axis=1)
-                            st.dataframe(df, hide_index=True, use_container_width=True)
+                            if not df.empty:
+                                # 按得分排序
+                                df['得分'] = pd.to_numeric(df['得分'], errors='coerce')
+                                df = df.sort_values('得分', ascending=False)
+                                df['得分'] = df['得分'].astype(str)
+                                st.dataframe(df, hide_index=True, use_container_width=True)
+                            else:
+                                st.info("暂无球员数据")
                         else:
-                            st.info("无数据")
+                            st.info("暂无球员数据")
+                else:
+                    # 只有比赛状态为进行中或已结束但没有数据时才显示提示
+                    st.info("球员数据暂未更新，请稍后刷新")
             else:
-                st.warning("球员数据加载失败")
+                st.warning("球员数据加载失败，请稍后重试")
 
     if i < len(events) - 1:
         st.divider()
 
 st.divider()
-col1, col2 = st.columns([3, 1])
-col1.caption(f"更新于: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
-if col2.button("🔄 刷新"):
+col1, col2, col3 = st.columns([3, 1, 1])
+col1.caption(f"更新于: {datetime.now(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')}")
+
+if col2.button("🔄 刷新数据"):
     st.cache_data.clear()
     st.rerun()
 
@@ -954,4 +1045,3 @@ if st.session_state.untranslated_players:
         st.write("以下球员名未找到翻译，请添加到 `player_translation` 字典中：")
         for player in sorted(st.session_state.untranslated_players):
             st.text(f'"{player}": "",')
-

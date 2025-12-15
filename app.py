@@ -49,23 +49,17 @@ def fetch_nba_schedule(date_str):
 def fetch_player_stats(event_id):
     """先尝试 summary，失败则用 boxscore 补全"""
     try:
-        # 第一优先级：summary 接口（含 labels）
         url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
         resp = requests.get(url, params={'event': event_id}, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         if resp.status_code == 200:
             data = resp.json()
-            # 如果有 boxscore 且 players 存在，直接返回
             if data.get('boxscore') and data.get('boxscore').get('players'):
                 return data
-            else:
-                # 尝试 fallback 到 boxscore
-                pass
-        else:
-            # 失败则尝试 boxscore
-            url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/boxscore?event={event_id}"
-            resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            if resp.status_code == 200:
-                return resp.json()
+        # Fallback to boxscore
+        url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/boxscore?event={event_id}"
+        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
     except Exception as e:
         st.session_state.debug = str(e)
         return None
@@ -77,13 +71,22 @@ def format_time(t):
     if ':' in s:
         return s
     try:
-        return f"{int(float(s))}:00"
+        minutes = int(float(s))
+        return f"{minutes}:00"
     except:
         return s
 
+def extract_stat_by_name(stats_list, stat_names):
+    """从 stats list 中按多个可能的名字查找值"""
+    for name in stat_names:
+        for stat in stats_list:
+            if stat.get('name') == name:
+                return str(stat.get('value', '0'))
+    return '0'
+
 def parse_player_stats(game_data):
-    """使用 labels 或 boxscore 补全解析"""
     try:
+        # 尝试从 boxscore players (带 labels) 解析
         boxscore = game_data.get('boxscore', {})
         players = boxscore.get('players', [])
         away_data, home_data = [], []
@@ -98,66 +101,42 @@ def parse_player_stats(game_data):
             if not labels or not athletes:
                 return []
 
-            label_idx = {label: i for i, label in enumerate(labels)}
+            # 建立 label 到 index 的映射
+            label_to_idx = {label: i for i, label in enumerate(labels)}
             result = []
 
             for ath in athletes:
                 athlete = ath.get('athlete', {})
-                stats = ath.get('stats', [])
-                if not athlete or len(stats) <= max(label_idx.values()):
+                stats_vals = ath.get('stats', [])
+                name = athlete.get('displayName', '').strip()
+                if not name or len(stats_vals) == 0:
                     continue
 
-                def g(label, default='0'):
-                    i = label_idx.get(label)
-                    if i is not None and 0 <= i < len(stats):
-                        v = stats[i]
-                        return str(v) if v not in ('', '--', 'N/A', None) else default
+                def get_stat(label_keys, default='0'):
+                    for key in label_keys:
+                        idx = label_to_idx.get(key)
+                        if idx is not None and idx < len(stats_vals):
+                            val = stats_vals[idx]
+                            if val not in (None, '', '--', 'N/A'):
+                                return str(val)
                     return default
 
-                name = athlete.get('displayName', '').strip()
-                if not name:
-                    continue
+                # 多种可能的字段名
+                fgm = get_stat(['FGM', 'fieldGoalsMade'])
+                fga = get_stat(['FGA', 'fieldGoalsAttempted'])
+                threepm = get_stat(['3PM', '3PT_MADE', 'threePointFieldGoalsMade'])
+                threepa = get_stat(['3PA', '3PT_ATT', 'threePointFieldGoalsAttempted'])
+                ftm = get_stat(['FTM', 'freeThrowsMade'])
+                fta = get_stat(['FTA', 'freeThrowsAttempted'])
+                pts = get_stat(['PTS', 'points'])
+                reb = get_stat(['REB', 'reboundsTotal', 'rebounds'])
+                ast = get_stat(['AST', 'assists'])
+                tov = get_stat(['TO', 'turnovers'])
+                mins = get_stat(['MIN', 'minutes'])
 
                 result.append({
                     '球员': name,
-                    '时间': format_time(g('MIN')),
-                    '得分': g('PTS'),
-                    '投篮': f"{g('FGM')}/{g('FGA')}",
-                    '三分': f"{g('3PM')}/{g('3PA')}",
-                    '罚球': f"{g('FTM')}/{g('FTA')}",
-                    '篮板': g('REB'),
-                    '助攻': g('AST'),
-                    '失误': g('TO')
-                })
-            return result
-
-        def extract_from_boxscore(team_section):
-            """从 boxscore 接口解析"""
-            if not team_section:
-                return []
-            athletes = team_section.get('athletes', [])
-            result = []
-            for ath in athletes:
-                player = ath.get('player', {})
-                name = player.get('displayName', '').strip()
-                if not name:
-                    continue
-                stats = player.get('statistics', [])
-                fgm = next((s.get('value') for s in stats if s.get('name') == 'fieldGoalsMade'), '0')
-                fga = next((s.get('value') for s in stats if s.get('name') == 'fieldGoalsAttempted'), '0')
-                threepm = next((s.get('value') for s in stats if s.get('name') == 'threePointersMade'), '0')
-                threepa = next((s.get('value') for s in stats if s.get('name') == 'threePointersAttempted'), '0')
-                ftm = next((s.get('value') for s in stats if s.get('name') == 'freeThrowsMade'), '0')
-                fta = next((s.get('value') for s in stats if s.get('name') == 'freeThrowsAttempt'), '0')
-                pts = next((s.get('value') for s in stats if s.get('name') == 'points'), '0')
-                reb = next((s.get('value') for s in stats if s.get('name') == 'rebounds'), '0')
-                ast = next((s.get('value') for s in stats if s.get('name') == 'assists'), '0')
-                tov = next((s.get('value') for s in stats if s.get('name') == 'turnovers'), '0')
-                minutes = next((s.get('value') for s in stats if s.get('name') == 'minutes'), '0')
-
-                result.append({
-                    '球员': name,
-                    '时间': format_time(minutes),
+                    '时间': format_time(mins),
                     '得分': pts,
                     '投篮': f"{fgm}/{fga}",
                     '三分': f"{threepm}/{threepa}",
@@ -168,32 +147,61 @@ def parse_player_stats(game_data):
                 })
             return result
 
-        # 先尝试 labels
+        # 优先尝试 labels 方式
         if len(players) > 0:
             away_data = extract_from_labels(players[0])
         if len(players) > 1:
             home_data = extract_from_labels(players[1])
 
-        # 若仍为空，尝试 boxscore
-        if not away_data and not home_data:
-            # 重新请求 boxscore 数据
-            boxscore_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/boxscore?event={game_data['id']}"
-            try:
-                box_resp = requests.get(boxscore_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-                if box_resp.status_code == 200:
-                    box_data = box_resp.json()
-                    if box_data.get('teams'):
-                        team_a = box_data['teams'][0].get('players', [])
-                        team_b = box_data['teams'][1].get('players', [])
-                        away_data = extract_from_boxscore(team_a)
-                        home_data = extract_from_boxscore(team_b)
-            except:
-                pass
+        # 如果仍为空，尝试从 boxscore 的 teams 结构解析（备用）
+        if (not away_data or not home_data) and 'teams' in game_data:
+            teams = game_data['teams']
+            if len(teams) >= 2:
+                team_a_players = teams[0].get('statistics', {}).get('athletes', [])
+                team_b_players = teams[1].get('statistics', {}).get('athletes', [])
+
+                def extract_from_teams_structure(team_players):
+                    res = []
+                    for p in team_players:
+                        player = p.get('athlete', {})
+                        name = player.get('displayName', '').strip()
+                        if not name:
+                            continue
+                        stats = p.get('stats', [])
+                        fgm = extract_stat_by_name(stats, ['fieldGoalsMade'])
+                        fga = extract_stat_by_name(stats, ['fieldGoalsAttempted'])
+                        threepm = extract_stat_by_name(stats, ['threePointFieldGoalsMade'])
+                        threepa = extract_stat_by_name(stats, ['threePointFieldGoalsAttempted'])
+                        ftm = extract_stat_by_name(stats, ['freeThrowsMade'])
+                        fta = extract_stat_by_name(stats, ['freeThrowsAttempted'])
+                        pts = extract_stat_by_name(stats, ['points'])
+                        reb = extract_stat_by_name(stats, ['reboundsTotal', 'rebounds'])
+                        ast = extract_stat_by_name(stats, ['assists'])
+                        tov = extract_stat_by_name(stats, ['turnovers'])
+                        mins = extract_stat_by_name(stats, ['minutes'])
+
+                        res.append({
+                            '球员': name,
+                            '时间': format_time(mins),
+                            '得分': pts,
+                            '投篮': f"{fgm}/{fga}",
+                            '三分': f"{threepm}/{threepa}",
+                            '罚球': f"{ftm}/{fta}",
+                            '篮板': reb,
+                            '助攻': ast,
+                            '失误': tov
+                        })
+                    return res
+
+                if not away_data:
+                    away_data = extract_from_teams_structure(team_a_players)
+                if not home_data:
+                    home_data = extract_from_teams_structure(team_b_players)
 
         return away_data, home_data
 
     except Exception as e:
-        st.session_state.debug = str(e)
+        st.session_state.debug = f"parse error: {str(e)}"
         return [], []
 
 # Sidebar
@@ -239,14 +247,12 @@ for i, event in enumerate(events):
     desc = status_type.get('description', '未开始')
     badge = {"in": "🟢 进行中", "post": "⚫ 已结束"}.get(state, "⏳ 未开始")
 
-    # 时间
     try:
         utc_time = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
         bj_time = utc_time.astimezone(beijing_tz).strftime("%H:%M")
     except:
         bj_time = "时间待定"
 
-    # 显示比赛
     cols = st.columns([2, 1, 0.5, 1, 2])
     cols[0].markdown(f"**{away_name}**")
     cols[1].markdown(f"**{away_score}**")
@@ -255,7 +261,6 @@ for i, event in enumerate(events):
     cols[4].markdown(f"**{home_name}**")
     st.caption(f"{badge} | {desc} | ⏰ {bj_time}")
 
-    # 球员数据
     if state in ['in', 'post']:
         with st.spinner("加载球员数据..."):
             game_data = fetch_player_stats(event['id'])
@@ -278,9 +283,6 @@ for i, event in enumerate(events):
                         if home_p:
                             df = pd.DataFrame(home_p)
                             df['pts'] = pd.to_numeric(df['得分'], errors='coerce')
-                            df = df.sort_values
-                            df = pd.DataFrame(home_p)
-                            df['pts'] = pd.to_numeric(df['得分'], errors='coerce')
                             df = df.sort_values('pts', ascending=False).drop('pts', axis=1)
                             st.dataframe(df, hide_index=True, use_container_width=True)
                         else:
@@ -291,7 +293,6 @@ for i, event in enumerate(events):
     if i < len(events) - 1:
         st.divider()
 
-# Footer
 st.divider()
 col1, col2 = st.columns([3, 1])
 col1.caption(f"更新于: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")

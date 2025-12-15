@@ -86,103 +86,45 @@ def extract_stat_by_name(stats_list, stat_names):
 
 def parse_player_stats(game_data):
     try:
-        # 尝试从 boxscore players (带 labels) 解析
-        boxscore = game_data.get('boxscore', {})
-        players = boxscore.get('players', [])
         away_data, home_data = [], []
 
-        def extract_from_labels(team_section):
-            stats_list = team_section.get('statistics', [])
-            if not stats_list:
-                return []
-            main = stats_list[0]
-            labels = main.get('labels', [])
-            athletes = main.get('athletes', [])
-            if not labels or not athletes:
-                return []
-
-            # 建立 label 到 index 的映射
-            label_to_idx = {label: i for i, label in enumerate(labels)}
-            result = []
-
-            for ath in athletes:
-                athlete = ath.get('athlete', {})
-                stats_vals = ath.get('stats', [])
-                name = athlete.get('displayName', '').strip()
-                if not name or len(stats_vals) == 0:
-                    continue
-
-                def get_stat(label_keys, default='0'):
-                    for key in label_keys:
-                        idx = label_to_idx.get(key)
-                        if idx is not None and idx < len(stats_vals):
-                            val = stats_vals[idx]
-                            if val not in (None, '', '--', 'N/A'):
-                                return str(val)
-                    return default
-
-                # 多种可能的字段名
-                fgm = get_stat(['FGM', 'fieldGoalsMade'])
-                fga = get_stat(['FGA', 'fieldGoalsAttempted'])
-                threepm = get_stat(['3PM', '3PT_MADE', 'threePointFieldGoalsMade'])
-                threepa = get_stat(['3PA', '3PT_ATT', 'threePointFieldGoalsAttempted'])
-                ftm = get_stat(['FTM', 'freeThrowsMade'])
-                fta = get_stat(['FTA', 'freeThrowsAttempted'])
-                pts = get_stat(['PTS', 'points'])
-                reb = get_stat(['REB', 'reboundsTotal', 'rebounds'])
-                ast = get_stat(['AST', 'assists'])
-                tov = get_stat(['TO', 'turnovers'])
-                mins = get_stat(['MIN', 'minutes'])
-
-                result.append({
-                    '球员': name,
-                    '时间': format_time(mins),
-                    '得分': pts,
-                    '投篮': f"{fgm}/{fga}",
-                    '三分': f"{threepm}/{threepa}",
-                    '罚球': f"{ftm}/{fta}",
-                    '篮板': reb,
-                    '助攻': ast,
-                    '失误': tov
-                })
-            return result
-
-        # 优先尝试 labels 方式
-        if len(players) > 0:
-            away_data = extract_from_labels(players[0])
-        if len(players) > 1:
-            home_data = extract_from_labels(players[1])
-
-        # 如果仍为空，尝试从 boxscore 的 teams 结构解析（备用）
-        if (not away_data or not home_data) and 'teams' in game_data:
-            teams = game_data['teams']
+        # 方法1：优先从 boxscore -> teams -> statistics 解析（最稳定）
+        if 'boxscore' in game_data and 'teams' in game_data['boxscore']:
+            teams = game_data['boxscore']['teams']
             if len(teams) >= 2:
-                team_a_players = teams[0].get('statistics', {}).get('athletes', [])
-                team_b_players = teams[1].get('statistics', {}).get('athletes', [])
-
-                def extract_from_teams_structure(team_players):
-                    res = []
-                    for p in team_players:
-                        player = p.get('athlete', {})
+                for idx, team in enumerate(teams[:2]):
+                    athletes = team.get('statistics', {}).get('athletes', [])
+                    parsed = []
+                    for ath in athletes:
+                        player = ath.get('athlete', {})
                         name = player.get('displayName', '').strip()
-                        if not name:
+                        stats = ath.get('stats', [])
+                        if not name or not stats:
                             continue
-                        stats = p.get('stats', [])
-                        fgm = extract_stat_by_name(stats, ['fieldGoalsMade'])
-                        fga = extract_stat_by_name(stats, ['fieldGoalsAttempted'])
-                        threepm = extract_stat_by_name(stats, ['threePointFieldGoalsMade'])
-                        threepa = extract_stat_by_name(stats, ['threePointFieldGoalsAttempted'])
-                        ftm = extract_stat_by_name(stats, ['freeThrowsMade'])
-                        fta = extract_stat_by_name(stats, ['freeThrowsAttempted'])
-                        pts = extract_stat_by_name(stats, ['points'])
-                        reb = extract_stat_by_name(stats, ['reboundsTotal', 'rebounds'])
-                        ast = extract_stat_by_name(stats, ['assists'])
-                        tov = extract_stat_by_name(stats, ['turnovers'])
-                        mins = extract_stat_by_name(stats, ['minutes'])
 
-                        res.append({
+                        # stats 是一个字符串列表，顺序固定，但需确认顺序
+                        # 实测顺序（2025年12月）: MIN, FGM, FGA, FG%, 3PM, 3PA, 3P%, FTM, FTA, FT%, OREB, DREB, REB, AST, STL, BLK, TO, PF, PTS
+                        def safe_get(i, default='0'):
+                            return str(stats[i]) if i < len(stats) else default
+
+                        try:
+                            minutes = safe_get(0)
+                            fgm = safe_get(1)
+                            fga = safe_get(2)
+                            threepm = safe_get(4)
+                            threepa = safe_get(5)
+                            ftm = safe_get(7)
+                            fta = safe_get(8)
+                            pts = safe_get(18)
+                            reb = safe_get(12)
+                            ast = safe_get(13)
+                            tov = safe_get(16)
+                        except:
+                            continue
+
+                        parsed.append({
                             '球员': name,
-                            '时间': format_time(mins),
+                            '时间': format_time(minutes),
                             '得分': pts,
                             '投篮': f"{fgm}/{fga}",
                             '三分': f"{threepm}/{threepa}",
@@ -191,17 +133,63 @@ def parse_player_stats(game_data):
                             '助攻': ast,
                             '失误': tov
                         })
-                    return res
+                    if idx == 0:
+                        away_data = parsed
+                    else:
+                        home_data = parsed
+                return away_data, home_data
 
-                if not away_data:
-                    away_data = extract_from_teams_structure(team_a_players)
-                if not home_data:
-                    home_data = extract_from_teams_structure(team_b_players)
+        # 方法2：fallback 到旧结构（兼容性）
+        boxscore = game_data.get('boxscore', {})
+        players = boxscore.get('players', [])
+        if len(players) >= 2:
+            # 简单按顺序取，不依赖 labels
+            for i, team_section in enumerate(players[:2]):
+                stats_list = team_section.get('statistics', [])
+                if not stats_list:
+                    continue
+                main = stats_list[0]
+                athletes = main.get('athletes', [])
+                parsed = []
+                for ath in athletes:
+                    athlete = ath.get('athlete', {})
+                    name = athlete.get('displayName', '').strip()
+                    raw_stats = ath.get('stats', [])
+                    if not name or len(raw_stats) < 10:
+                        continue
+                    # 假设顺序一致
+                    minutes = raw_stats[0] if len(raw_stats) > 0 else '0'
+                    fgm = raw_stats[1] if len(raw_stats) > 1 else '0'
+                    fga = raw_stats[2] if len(raw_stats) > 2 else '0'
+                    threepm = raw_stats[4] if len(raw_stats) > 4 else '0'
+                    threepa = raw_stats[5] if len(raw_stats) > 5 else '0'
+                    ftm = raw_stats[7] if len(raw_stats) > 7 else '0'
+                    fta = raw_stats[8] if len(raw_stats) > 8 else '0'
+                    pts = raw_stats[-1] if raw_stats else '0'
+                    reb = raw_stats[12] if len(raw_stats) > 12 else '0'
+                    ast = raw_stats[13] if len(raw_stats) > 13 else '0'
+                    tov = raw_stats[16] if len(raw_stats) > 16 else '0'
 
-        return away_data, home_data
+                    parsed.append({
+                        '球员': name,
+                        '时间': format_time(minutes),
+                        '得分': pts,
+                        '投篮': f"{fgm}/{fga}",
+                        '三分': f"{threepm}/{threepa}",
+                        '罚球': f"{ftm}/{fta}",
+                        '篮板': reb,
+                        '助攻': ast,
+                        '失误': tov
+                    })
+                if i == 0:
+                    away_data = parsed
+                else:
+                    home_data = parsed
+            return away_data, home_data
 
+        return [], []
     except Exception as e:
-        st.session_state.debug = f"parse error: {str(e)}"
+        st.session_state.debug = f"Parse error: {str(e)}"
         return [], []
 
 # Sidebar
@@ -299,3 +287,4 @@ col1.caption(f"更新于: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
 if col2.button("🔄 刷新"):
     st.cache_data.clear()
     st.rerun()
+

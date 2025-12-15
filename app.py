@@ -780,7 +780,7 @@ def parse_player_stats(game_data):
             
             parsed = []
             for ath in athletes:
-                # 尝试从多个字段获取球员名
+                # 获取球员名
                 athlete_data = ath.get('athlete', {})
                 name_en = (athlete_data.get('displayName', '') or 
                           athlete_data.get('fullName', '') or 
@@ -791,22 +791,23 @@ def parse_player_stats(game_data):
                 if not name_en or name_en == 'DNP':
                     continue
 
-                name_cn = translate_player_name(name_en)  # <<< 关键：翻译球员名
+                name_cn = translate_player_name(name_en)
                 raw_vals = ath.get('stats', [])
                 if not raw_vals:
                     continue
 
+                # 构建标签到值的映射
                 stat_map = {}
                 for i, label in enumerate(labels):
                     if i < len(raw_vals):
                         stat_map[label] = raw_vals[i]
 
+                # 解析投篮数据
                 def parse_shot(s):
                     s = str(s).replace('/', '-').strip()
                     if '-' in s:
                         parts = s.split('-')
                         if len(parts) == 2:
-                            # 确保是数字
                             try:
                                 int(parts[0]), int(parts[1])
                                 return parts[0], parts[1]
@@ -829,7 +830,7 @@ def parse_player_stats(game_data):
                 tov = get_num('TO')
 
                 parsed.append({
-                    '球员': name_cn,  # <<< 使用中文名
+                    '球员': name_cn,
                     '时间': format_time(minutes),
                     '得分': pts,
                     '投篮': f"{fgm}/{fga}",
@@ -953,3 +954,4 @@ if st.session_state.untranslated_players:
         st.write("以下球员名未找到翻译，请添加到 `player_translation` 字典中：")
         for player in sorted(st.session_state.untranslated_players):
             st.text(f'"{player}": "",')
+

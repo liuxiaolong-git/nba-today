@@ -86,13 +86,19 @@ def extract_stat_by_name(stats_list, stat_names):
 
 def parse_player_stats(game_data):
     try:
-        away_data, home_data = [], []
+        # 先获取主客场队伍 ID
+        header = game_data.get('header', {})
+        home_team_id = str(header.get('homeTeam', {}).get('id', ''))
+        away_team_id = str(header.get('awayTeam', {}).get('id', ''))
+
+        home_data, away_data = [], []
+
         players_section = game_data.get('boxscore', {}).get('players', [])
         if not players_section:
             return [], []
 
-        for idx, team_data in enumerate(players_section[:2]):
-            team_name = team_data.get('team', {}).get('displayName', '')
+        for team_data in players_section:
+            team_id = str(team_data.get('team', {}).get('id', ''))
             stats_list = team_data.get('statistics', [])
             if not stats_list:
                 continue
@@ -107,13 +113,11 @@ def parse_player_stats(game_data):
                 if not name or not raw_vals:
                     continue
 
-                # 构建字段映射
                 stat_map = {}
                 for i, label in enumerate(labels):
                     if i < len(raw_vals):
                         stat_map[label] = raw_vals[i]
 
-                # 解析投篮: 可能是 "11-21" 或 "11/21"
                 def parse_shot(s):
                     s = str(s).replace('/', '-').strip()
                     if '-' in s:
@@ -126,7 +130,6 @@ def parse_player_stats(game_data):
                 threepm, threepa = parse_shot(stat_map.get('3PM-A', stat_map.get('3PT', '0-0')))
                 ftm, fta = parse_shot(stat_map.get('FTM-A', stat_map.get('FT', '0-0')))
 
-                # 其他字段（通常是纯数字）
                 def get_num(key, default='0'):
                     val = stat_map.get(key, default)
                     return str(val) if str(val).replace('.', '').isdigit() else default
@@ -148,10 +151,14 @@ def parse_player_stats(game_data):
                     '助攻': ast,
                     '失误': tov
                 })
-            if idx == 0:
+
+            # 根据 team_id 分配到主队或客队
+            if team_id == away_team_id:
                 away_data = parsed
-            else:
+            elif team_id == home_team_id:
                 home_data = parsed
+            # 如果都匹配不上，暂且忽略（或可 fallback）
+
         return away_data, home_data
     except Exception as e:
         st.session_state.debug = f"Parse error: {str(e)}"
@@ -251,6 +258,7 @@ col1.caption(f"更新于: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
 if col2.button("🔄 刷新"):
     st.cache_data.clear()
     st.rerun()
+
 
 
 

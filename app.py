@@ -1055,10 +1055,22 @@ if col2.button("🔄 刷新数据"):
     st.cache_data.clear()
     st.rerun()
 
-# 显示未翻译的球员名
+# 在显示未翻译列表的部分，修改为：
 if st.session_state.untranslated_players:
     with st.expander("⚠️ 未翻译球员名（需要添加到映射表）"):
-        st.write("以下球员名未找到翻译，请添加到 `player_translation` 字典中：")
+        # 只显示真正未翻译的
+        truly_untranslated = []
         for player in sorted(st.session_state.untranslated_players):
-            st.text(f'"{player}": "",')
+            # 检查是否能在当前映射表中找到
+            translated = translate_player_name(player)
+            if translated == player:  # 如果返回原值，说明没有翻译
+                truly_untranslated.append(player)
+        
+        if truly_untranslated:
+            st.write(f"以下 {len(truly_untranslated)} 个球员名未找到翻译：")
+            for player in truly_untranslated:
+                st.text(f'"{player}": "",')
+        else:
+            st.success("✓ 所有球员名都已翻译！")
+
 

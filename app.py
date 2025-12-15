@@ -108,9 +108,13 @@ def parse_player_stats(game_data):
         away_players_data = []
         home_players_data = []
         
-        # 处理客队球员
-        away_team_players = players[0].get('statistics', [{}])[0].get('athletes', [])
-        for player in away_team_players:
+        # 修正: 交换主客队球员数据顺序
+        # 根据ESPN API，players[0]是主队，players[1]是客队
+        home_team_players = players[0].get('statistics', [{}])[0].get('athletes', [])
+        away_team_players = players[1].get('statistics', [{}])[0].get('athletes', [])
+        
+        # 处理主队球员
+        for player in home_team_players:
             athlete = player.get('athlete', {})
             stats = player.get('stats', [])
             if athlete and stats:
@@ -128,21 +132,21 @@ def parse_player_stats(game_data):
                 assists = stats[7] if len(stats) > 7 else '0'
                 turnovers = stats[8] if len(stats) > 8 else '0'
                 
+                # 修正投篮格式: 使用"命中/出手"格式
                 player_info = {
                     '球员': player_name,
                     '出场时间': time_played,
                     '得分': str(points),
-                    '投篮': f"{fgm}-{fga}",
-                    '三分': f"{three_pm}-{three_pa}",
-                    '助攻': str(assists),  # 修复助攻显示
-                    '篮板': str(rebounds),  # 修复篮板显示
+                    '投篮': f"{fgm}/{fga}",  # 修正格式
+                    '三分': f"{three_pm}/{three_pa}",  # 修正格式
+                    '助攻': str(assists),
+                    '篮板': str(rebounds),
                     '失误': str(turnovers)
                 }
-                away_players_data.append(player_info)
+                home_players_data.append(player_info)
         
-        # 处理主队球员
-        home_team_players = players[1].get('statistics', [{}])[0].get('athletes', [])
-        for player in home_team_players:
+        # 处理客队球员
+        for player in away_team_players:
             athlete = player.get('athlete', {})
             stats = player.get('stats', [])
             if athlete and stats:
@@ -163,13 +167,13 @@ def parse_player_stats(game_data):
                     '球员': player_name,
                     '出场时间': time_played,
                     '得分': str(points),
-                    '投篮': f"{fgm}-{fga}",
-                    '三分': f"{three_pm}-{three_pa}",
-                    '助攻': str(assists),  # 修复助攻显示
-                    '篮板': str(rebounds),  # 修复篮板显示
+                    '投篮': f"{fgm}/{fga}",  # 修正格式
+                    '三分': f"{three_pm}/{three_pa}",  # 修正格式
+                    '助攻': str(assists),
+                    '篮板': str(rebounds),
                     '失误': str(turnovers)
                 }
-                home_players_data.append(player_info)
+                away_players_data.append(player_info)
         
         return away_players_data, home_players_data
     except Exception as e:

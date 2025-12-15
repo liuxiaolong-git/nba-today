@@ -5,8 +5,8 @@ import pytz
 from datetime import datetime, timedelta
 import json
 
-st.set_page_config(page_title="NBA赛程查询", page_icon="🏀", layout="wide")
-st.title("🏀 NBA实时赛程")
+st.set_page_config(page_title="NBA赛程查询(李菲同学)", page_icon="🏀", layout="wide")
+st.title("🏀 NBA实时赛程(小菲菲)")
 
 # 初始化 session state
 if 'refresh_count' not in st.session_state:
@@ -442,3 +442,4 @@ if st.session_state.untranslated_players:
                 st.code(f'"{player}": "",')
         else:
             st.success("✓ 所有球员名都已翻译！")
+

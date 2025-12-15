@@ -16,8 +16,8 @@ if 'refresh_count' not in st.session_state:
     st.session_state.refresh_count = 0
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = datetime.now()
-if 'refresh_trigger' not in st.session_state:
-    st.session_state.refresh_trigger = False
+if 'expanded_games' not in st.session_state:
+    st.session_state.expanded_games = {}
 
 # 获取北京时间
 beijing_tz = pytz.timezone('Asia/Shanghai')
@@ -145,7 +145,6 @@ def fetch_nba_schedule(date_str):
         return response.json()
         
     except Exception as e:
-        st.error(f"获取赛程失败: {e}")
         return None
 
 @st.cache_data(ttl=8)
@@ -262,25 +261,6 @@ def safe_int(value):
     except:
         return 0
 
-# 检查是否需要自动刷新
-if st.session_state.auto_refresh:
-    # 检查是否有进行中的比赛需要刷新
-    schedule_data = fetch_nba_schedule(today_str)
-    if schedule_data:
-        events = schedule_data.get('events', [])
-        live_games = 0
-        for event in events:
-            status_detail = event.get('status', {}).get('type', {}).get('state', 'pre')
-            if status_detail == 'in':
-                live_games += 1
-        
-        if live_games > 0:
-            # 计算距离上次刷新的时间
-            time_since_refresh = (datetime.now() - st.session_state.last_refresh).total_seconds()
-            if time_since_refresh >= 5:
-                # 设置刷新触发器
-                st.session_state.refresh_trigger = True
-
 # 侧边栏配置
 with st.sidebar:
     st.header("⚙️ 查询设置")
@@ -312,229 +292,216 @@ with st.sidebar:
     st.caption("• 未收录球员显示英文名")
     st.caption("• 比赛数据实时更新")
 
-# 主界面 - 紧凑布局
-col1, col2 = st.columns([3, 1])
+# 主界面
+st.subheader(f"📅 {selected_date.strftime('%Y-%m-%d')} 赛程")
 
-with col1:
-    st.subheader(f"📅 {selected_date.strftime('%Y-%m-%d')} 赛程")
+# 获取数据
+with st.spinner("加载赛程数据中..."):
+    schedule_data = fetch_nba_schedule(selected_date.strftime('%Y-%m-%d'))
+
+if not schedule_data:
+    st.error("无法获取赛程数据，请检查网络连接")
+    st.stop()
+
+events = schedule_data.get('events', [])
+
+if not events:
+    st.info("今日暂无NBA比赛安排")
+    st.stop()
+
+# 统计比赛状态
+live_count = 0
+for event in events:
+    status_detail = event.get('status', {}).get('type', {}).get('state', 'pre')
+    if status_detail == 'in':
+        live_count += 1
+
+if live_count > 0:
+    st.info(f"🟢 有 {live_count} 场比赛正在进行中")
+
+# 显示比赛列表
+for i, event in enumerate(events):
+    event_id = event.get('id', '')
+    status = event.get('status', {})
+    status_detail = status.get('type', {}).get('state', 'pre')
     
-    # 获取数据
-    with st.spinner("加载赛程数据中..."):
-        schedule_data = fetch_nba_schedule(selected_date.strftime('%Y-%m-%d'))
+    # 比赛状态
+    if status_detail == 'in':
+        status_badge = "🟢 进行中"
+    elif status_detail == 'post':
+        status_badge = "⚫ 已结束"
+    else:
+        status_badge = "⏳ 未开始"
+    
+    # 比赛时间
+    date_str = event.get('date', '')
+    if date_str:
+        try:
+            utc_time = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            beijing_time = utc_time.astimezone(beijing_tz)
+            game_time = beijing_time.strftime("%H:%M")
+        except:
+            game_time = "时间待定"
+    else:
+        game_time = "时间待定"
+    
+    # 参赛队伍
+    competitions = event.get('competitions', [])
+    if competitions:
+        competition = competitions[0]
+        competitors = competition.get('competitors', [])
+        
+        if len(competitors) >= 2:
+            away_team = competitors[0].get('team', {})
+            home_team = competitors[1].get('team', {})
+            
+            away_name_cn = translate_team_name(away_team.get('displayName', '客队'))
+            home_name_cn = translate_team_name(home_team.get('displayName', '主队'))
+            
+            away_score = competitors[0].get('score', '0')
+            home_score = competitors[1].get('score', '0')
+            away_id = away_team.get('id', '')
+            home_id = home_team.get('id', '')
+            
+            # 创建比赛卡片
+            with st.container():
+                # 第一行：比分和状态
+                score_col1, score_col2, score_col3, score_col4, score_col5 = st.columns([2, 1, 0.5, 1, 2])
+                
+                with score_col1:
+                    st.markdown(f"**{away_name_cn}**")
+                with score_col2:
+                    st.markdown(f"**{away_score}**")
+                with score_col3:
+                    st.markdown("**VS**")
+                with score_col4:
+                    st.markdown(f"**{home_score}**")
+                with score_col5:
+                    st.markdown(f"**{home_name_cn}**")
+                
+                # 第二行：状态和时间
+                info_col1, info_col2 = st.columns([3, 1])
+                with info_col1:
+                    st.caption(f"{status_badge} | ⏰ {game_time}")
+                with info_col2:
+                    # 显示/隐藏球员数据的按钮
+                    if status_detail in ['in', 'post']:
+                        button_label = "📊 显示球员数据" if not st.session_state.expanded_games.get(event_id, False) else "📊 隐藏球员数据"
+                        if st.button(button_label, key=f"btn_{event_id}", type="secondary"):
+                            st.session_state.expanded_games[event_id] = not st.session_state.expanded_games.get(event_id, False)
+                            st.rerun()
+                    else:
+                        st.caption("比赛开始后显示球员数据")
+                
+                # 第三行：球员数据（如果展开）
+                if st.session_state.expanded_games.get(event_id, False) and status_detail in ['in', 'post']:
+                    with st.spinner("加载球员数据..."):
+                        game_details = fetch_game_details(event_id)
+                        
+                        if game_details:
+                            away_players = parse_player_stats_simple(game_details, away_id)
+                            home_players = parse_player_stats_simple(game_details, home_id)
+                            
+                            if away_players or home_players:
+                                # 使用两个并排的容器显示球员数据
+                                # 注意：这里不再使用st.columns，而是直接使用两个容器
+                                
+                                # 客队球员数据
+                                st.markdown(f"**{away_name_cn} 球员数据**")
+                                if away_players:
+                                    away_df = pd.DataFrame(away_players)
+                                    st.dataframe(
+                                        away_df[['球员', '出场时间', '得分', '助攻', '篮板', '失误']],
+                                        hide_index=True,
+                                        use_container_width=True,
+                                        height=150
+                                    )
+                                else:
+                                    st.info("暂无球员数据")
+                                
+                                # 主队球员数据
+                                st.markdown(f"**{home_name_cn} 球员数据**")
+                                if home_players:
+                                    home_df = pd.DataFrame(home_players)
+                                    st.dataframe(
+                                        home_df[['球员', '出场时间', '得分', '助攻', '篮板', '失误']],
+                                        hide_index=True,
+                                        use_container_width=True,
+                                        height=150
+                                    )
+                                else:
+                                    st.info("暂无球员数据")
+                            else:
+                                st.info("球员数据暂不可用")
+                        else:
+                            st.info("无法获取球员数据")
+    
+    # 比赛之间的分隔线
+    if i < len(events) - 1:
+        st.divider()
 
-    if not schedule_data:
-        st.error("无法获取赛程数据，请检查网络连接")
-        st.stop()
+# 右侧统计信息（现在放在底部）
+st.divider()
+st.subheader("📊 今日统计")
 
-    events = schedule_data.get('events', [])
-
-    if not events:
-        st.info("今日暂无NBA比赛安排")
-        st.stop()
-
-    # 统计比赛状态
-    live_count = 0
+if events:
+    status_counts = {'进行中': 0, '已结束': 0, '未开始': 0}
     for event in events:
         status_detail = event.get('status', {}).get('type', {}).get('state', 'pre')
         if status_detail == 'in':
-            live_count += 1
-    
-    if live_count > 0:
-        st.info(f"🟢 有 {live_count} 场比赛正在进行中")
-
-    # 紧凑显示比赛
-    for i, event in enumerate(events):
-        event_id = event.get('id', '')
-        status = event.get('status', {})
-        status_detail = status.get('type', {}).get('state', 'pre')
-        
-        # 比赛状态
-        if status_detail == 'in':
-            status_badge = "🟢 进行中"
+            status_counts['进行中'] += 1
         elif status_detail == 'post':
-            status_badge = "⚫ 已结束"
+            status_counts['已结束'] += 1
         else:
-            status_badge = "⏳ 未开始"
-        
-        # 比赛时间
-        date_str = event.get('date', '')
-        if date_str:
-            try:
-                utc_time = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                beijing_time = utc_time.astimezone(beijing_tz)
-                game_time = beijing_time.strftime("%H:%M")
-            except:
-                game_time = "时间待定"
-        else:
-            game_time = "时间待定"
-        
-        # 参赛队伍
-        competitions = event.get('competitions', [])
-        if competitions:
-            competition = competitions[0]
-            competitors = competition.get('competitors', [])
-            
-            if len(competitors) >= 2:
-                away_team = competitors[0].get('team', {})
-                home_team = competitors[1].get('team', {})
-                
-                away_name_cn = translate_team_name(away_team.get('displayName', '客队'))
-                home_name_cn = translate_team_name(home_team.get('displayName', '主队'))
-                
-                away_score = competitors[0].get('score', '0')
-                home_score = competitors[1].get('score', '0')
-                away_id = away_team.get('id', '')
-                home_id = home_team.get('id', '')
-                
-                # 创建比赛卡片容器
-                with st.container():
-                    # 紧凑的比赛卡片
-                    col_team1, col_score1, col_vs, col_score2, col_team2 = st.columns([2.5, 0.8, 0.5, 0.8, 2.5])
-                    
-                    with col_team1:
-                        st.markdown(f"**{away_name_cn}**")
-                    
-                    with col_score1:
-                        st.markdown(f"**{away_score}**")
-                    
-                    with col_vs:
-                        st.markdown("**VS**")
-                    
-                    with col_score2:
-                        st.markdown(f"**{home_score}**")
-                    
-                    with col_team2:
-                        st.markdown(f"**{home_name_cn}**")
-                    
-                    # 比赛信息行
-                    col_info1, col_info2 = st.columns([3, 1])
-                    with col_info1:
-                        st.caption(f"{status_badge} | ⏰ {game_time}")
-                    
-                    with col_info2:
-                        # 使用expander来显示/隐藏球员数据
-                        expander_key = f"exp_{event_id}"
-                        
-                        # 检查是否需要自动展开（进行中和已结束的比赛）
-                        if status_detail in ['in', 'post']:
-                            with st.expander("📊 球员数据", expanded=False):
-                                # 获取球员数据
-                                with st.spinner("加载球员数据..."):
-                                    game_details = fetch_game_details(event_id)
-                                    
-                                    if game_details:
-                                        away_players = parse_player_stats_simple(game_details, away_id)
-                                        home_players = parse_player_stats_simple(game_details, home_id)
-                                        
-                                        if away_players or home_players:
-                                            # 使用columns显示两队数据
-                                            player_col1, player_col2 = st.columns(2)
-                                            
-                                            with player_col1:
-                                                if away_players:
-                                                    st.markdown(f"**{away_name_cn}**")
-                                                    away_df = pd.DataFrame(away_players)
-                                                    st.dataframe(
-                                                        away_df[['球员', '出场时间', '得分', '助攻', '篮板', '失误']],
-                                                        hide_index=True,
-                                                        use_container_width=True,
-                                                        height=200
-                                                    )
-                                            
-                                            with player_col2:
-                                                if home_players:
-                                                    st.markdown(f"**{home_name_cn}**")
-                                                    home_df = pd.DataFrame(home_players)
-                                                    st.dataframe(
-                                                        home_df[['球员', '出场时间', '得分', '助攻', '篮板', '失误']],
-                                                        hide_index=True,
-                                                        use_container_width=True,
-                                                        height=200
-                                                    )
-                                        else:
-                                            st.info("球员数据暂不可用")
-                                    else:
-                                        st.info("无法获取球员数据")
-                        else:
-                            st.caption("比赛开始后显示球员数据")
-        
-        # 比赛之间的分隔线
-        if i < len(events) - 1:
-            st.divider()
-
-with col2:
-    st.subheader("📈 今日统计")
+            status_counts['未开始'] += 1
     
-    # 统计信息
-    if events:
-        status_counts = {'进行中': 0, '已结束': 0, '未开始': 0}
-        for event in events:
-            status_detail = event.get('status', {}).get('type', {}).get('state', 'pre')
-            if status_detail == 'in':
-                status_counts['进行中'] += 1
-            elif status_detail == 'post':
-                status_counts['已结束'] += 1
-            else:
-                status_counts['未开始'] += 1
-        
-        # 显示统计卡片
+    # 显示统计卡片
+    stat_col1, stat_col2, stat_col3 = st.columns(3)
+    
+    with stat_col1:
         st.metric("总比赛", len(events))
-        
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.metric("进行中", status_counts['进行中'])
-        with col_b:
-            st.metric("已结束", status_counts['已结束'])
-        
-        st.metric("未开始", status_counts['未开始'])
-        
-        # 显示高分比赛
-        st.markdown("**🔥 高分比赛**")
-        high_score_games = []
-        for event in events:
-            competitions = event.get('competitions', [])
-            if competitions:
-                competitors = competitions[0].get('competitors', [])
-                if len(competitors) >= 2:
-                    away_score = safe_int(competitors[0].get('score', '0'))
-                    home_score = safe_int(competitors[1].get('score', '0'))
-                    total_score = away_score + home_score
-                    
-                    if total_score > 200:
-                        away_name = translate_team_name(competitors[0].get('team', {}).get('displayName', ''))
-                        home_name = translate_team_name(competitors[1].get('team', {}).get('displayName', ''))
-                        high_score_games.append(f"{away_score}-{home_score}")
-        
-        if high_score_games:
-            for score in high_score_games[:3]:
-                st.write(f"• {score}")
-        else:
-            st.info("暂无高分比赛")
+    
+    with stat_col2:
+        st.metric("进行中", status_counts['进行中'])
+    
+    with stat_col3:
+        st.metric("已结束", status_counts['已结束'])
 
 # 底部状态栏
 st.divider()
-footer_cols = st.columns([2, 1, 1])
-with footer_cols[0]:
+footer_col1, footer_col2, footer_col3 = st.columns([2, 1, 1])
+
+with footer_col1:
     last_refresh_str = st.session_state.last_refresh.strftime("%H:%M:%S")
     st.caption(f"🕒 最后刷新: {last_refresh_str}")
-with footer_cols[1]:
+
+with footer_col2:
     st.caption(f"🔄 刷新次数: {st.session_state.refresh_count}")
-with footer_cols[2]:
+
+with footer_col3:
     if st.button("🔄 手动刷新", use_container_width=True, key="manual_refresh"):
         st.cache_data.clear()
         st.session_state.refresh_count += 1
         st.session_state.last_refresh = datetime.now()
         st.rerun()
 
-# 处理自动刷新
-if st.session_state.refresh_trigger:
-    st.session_state.refresh_trigger = False
-    st.session_state.refresh_count += 1
-    st.session_state.last_refresh = datetime.now()
-    st.rerun()
-
-# 显示自动刷新状态
-if st.session_state.auto_refresh and live_count > 0:
-    refresh_time = 5 - (datetime.now() - st.session_state.last_refresh).total_seconds()
-    if refresh_time > 0:
-        st.caption(f"⏳ 自动刷新倒计时: {int(refresh_time)}秒")
+# 检查是否需要自动刷新
+if st.session_state.auto_refresh:
+    # 检查是否有进行中的比赛
+    schedule_data_refresh = fetch_nba_schedule(today_str)
+    if schedule_data_refresh:
+        events_refresh = schedule_data_refresh.get('events', [])
+        live_games = 0
+        for event in events_refresh:
+            status_detail = event.get('status', {}).get('type', {}).get('state', 'pre')
+            if status_detail == 'in':
+                live_games += 1
+        
+        if live_games > 0:
+            # 计算距离上次刷新的时间
+            time_since_refresh = (datetime.now() - st.session_state.last_refresh).total_seconds()
+            if time_since_refresh >= 5:
+                # 自动刷新
+                st.session_state.refresh_count += 1
+                st.session_state.last_refresh = datetime.now()
+                st.rerun()

@@ -88,87 +88,37 @@ def parse_player_stats(game_data):
     try:
         away_data, home_data = [], []
 
-        # 方法1：优先从 boxscore -> teams -> statistics 解析（最稳定）
-        if 'boxscore' in game_data and 'teams' in game_data['boxscore']:
-            teams = game_data['boxscore']['teams']
-            if len(teams) >= 2:
-                for idx, team in enumerate(teams[:2]):
-                    athletes = team.get('statistics', {}).get('athletes', [])
-                    parsed = []
-                    for ath in athletes:
-                        player = ath.get('athlete', {})
-                        name = player.get('displayName', '').strip()
-                        stats = ath.get('stats', [])
-                        if not name or not stats:
-                            continue
-
-                        # stats 是一个字符串列表，顺序固定，但需确认顺序
-                        # 实测顺序（2025年12月）: MIN, FGM, FGA, FG%, 3PM, 3PA, 3P%, FTM, FTA, FT%, OREB, DREB, REB, AST, STL, BLK, TO, PF, PTS
-                        def safe_get(i, default='0'):
-                            return str(stats[i]) if i < len(stats) else default
-
-                        try:
-                            minutes = safe_get(0)
-                            fgm = safe_get(1)
-                            fga = safe_get(2)
-                            threepm = safe_get(4)
-                            threepa = safe_get(5)
-                            ftm = safe_get(7)
-                            fta = safe_get(8)
-                            pts = safe_get(18)
-                            reb = safe_get(12)
-                            ast = safe_get(13)
-                            tov = safe_get(16)
-                        except:
-                            continue
-
-                        parsed.append({
-                            '球员': name,
-                            '时间': format_time(minutes),
-                            '得分': pts,
-                            '投篮': f"{fgm}/{fga}",
-                            '三分': f"{threepm}/{threepa}",
-                            '罚球': f"{ftm}/{fta}",
-                            '篮板': reb,
-                            '助攻': ast,
-                            '失误': tov
-                        })
-                    if idx == 0:
-                        away_data = parsed
-                    else:
-                        home_data = parsed
-                return away_data, home_data
-
-        # 方法2：fallback 到旧结构（兼容性）
+        # 尝试从 boxscore.teams 解析（ESPN 当前主力结构）
         boxscore = game_data.get('boxscore', {})
-        players = boxscore.get('players', [])
-        if len(players) >= 2:
-            # 简单按顺序取，不依赖 labels
-            for i, team_section in enumerate(players[:2]):
-                stats_list = team_section.get('statistics', [])
-                if not stats_list:
-                    continue
-                main = stats_list[0]
-                athletes = main.get('athletes', [])
+        teams = boxscore.get('teams', [])
+        if len(teams) >= 2:
+            for idx, team in enumerate(teams[:2]):
+                stats_section = team.get('statistics', {})
+                athletes = stats_section.get('athletes', [])
                 parsed = []
                 for ath in athletes:
                     athlete = ath.get('athlete', {})
                     name = athlete.get('displayName', '').strip()
                     raw_stats = ath.get('stats', [])
-                    if not name or len(raw_stats) < 10:
+                    
+                    if not name or not isinstance(raw_stats, list) or len(raw_stats) < 19:
                         continue
-                    # 假设顺序一致
-                    minutes = raw_stats[0] if len(raw_stats) > 0 else '0'
-                    fgm = raw_stats[1] if len(raw_stats) > 1 else '0'
-                    fga = raw_stats[2] if len(raw_stats) > 2 else '0'
-                    threepm = raw_stats[4] if len(raw_stats) > 4 else '0'
-                    threepa = raw_stats[5] if len(raw_stats) > 5 else '0'
-                    ftm = raw_stats[7] if len(raw_stats) > 7 else '0'
-                    fta = raw_stats[8] if len(raw_stats) > 8 else '0'
-                    pts = raw_stats[-1] if raw_stats else '0'
-                    reb = raw_stats[12] if len(raw_stats) > 12 else '0'
-                    ast = raw_stats[13] if len(raw_stats) > 13 else '0'
-                    tov = raw_stats[16] if len(raw_stats) > 16 else '0'
+
+                    # 按固定索引提取
+                    def safe_str(x):
+                        return str(x) if x not in (None, '', 'null') else '0'
+
+                    minutes = safe_str(raw_stats[0])
+                    fgm = safe_str(raw_stats[1])
+                    fga = safe_str(raw_stats[2])
+                    threepm = safe_str(raw_stats[4])
+                    threepa = safe_str(raw_stats[5])
+                    ftm = safe_str(raw_stats[7])
+                    fta = safe_str(raw_stats[8])
+                    pts = safe_str(raw_stats[18])
+                    reb = safe_str(raw_stats[12])
+                    ast = safe_str(raw_stats[13])
+                    tov = safe_str(raw_stats[16])
 
                     parsed.append({
                         '球员': name,
@@ -181,7 +131,7 @@ def parse_player_stats(game_data):
                         '助攻': ast,
                         '失误': tov
                     })
-                if i == 0:
+                if idx == 0:
                     away_data = parsed
                 else:
                     home_data = parsed
@@ -191,7 +141,6 @@ def parse_player_stats(game_data):
     except Exception as e:
         st.session_state.debug = f"Parse error: {str(e)}"
         return [], []
-
 # Sidebar
 with st.sidebar:
     st.header("⚙️ 查询设置")
@@ -287,4 +236,5 @@ col1.caption(f"更新于: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
 if col2.button("🔄 刷新"):
     st.cache_data.clear()
     st.rerun()
+
 

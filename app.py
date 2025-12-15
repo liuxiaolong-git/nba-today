@@ -101,7 +101,7 @@ def format_time(time_str):
         return s
 
 def parse_player_stats(game_data):
-    """安全解析球员数据：players[0]=客队, players[1]=主队"""
+    """通过 labels 动态解析 stats，确保字段绝对正确"""
     try:
         boxscore = game_data.get('boxscore', {})
         players = boxscore.get('players', [])
@@ -109,44 +109,65 @@ def parse_player_stats(game_data):
         away_players_data = []
         home_players_data = []
 
-        def process_team_players(athlete_list):
+        def process_team_section(team_section):
+            stats_sections = team_section.get('statistics', [])
+            if not stats_sections:
+                return []
+            main_stat = stats_sections[0]  # 总览统计
+            labels = main_stat.get('labels', [])
+            athletes = main_stat.get('athletes', [])
+            
+            if not labels or not athletes:
+                return []
+
+            # 构建 label -> index 映射
+            label_to_index = {label: i for i, label in enumerate(labels)}
+            
             result = []
-            for p in athlete_list:
-                athlete = p.get('athlete', {})
-                stats = p.get('stats', [])
-                if not athlete:
+            for ath in athletes:
+                athlete = ath.get('athlete', {})
+                stats = ath.get('stats', [])
+                if not athlete or len(stats) <= max(label_to_index.values(), default=0):
                     continue
-                # 安全获取各字段（至少需要到三分出手，索引11）
+
+                def get_stat(label, default='0'):
+                    idx = label_to_index.get(label)
+                    if idx is not None and idx < len(stats):
+                        val = stats[idx]
+                        # 处理百分比或空值
+                        if val == '' or val == '--' or val == 'N/A':
+                            return default
+                        return str(val)
+                    return default
+
                 name = athlete.get('displayName', '')
-                time_played = format_time(stats[0]) if len(stats) > 0 else '0:00'
-                points      = str(stats[1]) if len(stats) > 1 else '0'
-                rebounds    = str(stats[2]) if len(stats) > 2 else '0'
-                assists     = str(stats[3]) if len(stats) > 3 else '0'
-                turnovers   = str(stats[6]) if len(stats) > 6 else '0'
-                fgm         = str(stats[8]) if len(stats) > 8 else '0'
-                fga         = str(stats[9]) if len(stats) > 9 else '0'
-                three_pm    = str(stats[10]) if len(stats) > 10 else '0'
-                three_pa    = str(stats[11]) if len(stats) > 11 else '0'
+                minutes = format_time(get_stat('MIN'))
+                points = get_stat('PTS')
+                assists = get_stat('AST')
+                rebounds = get_stat('REB')
+                turnovers = get_stat('TO')
+                fgm = get_stat('FGM')
+                fga = get_stat('FGA')
+                threepm = get_stat('3PM')
+                threepa = get_stat('3PA')
 
                 result.append({
                     '球员': name,
-                    '出场时间': time_played,
+                    '出场时间': minutes,
                     '得分': points,
                     '投篮': f"{fgm}/{fga}",
-                    '三分': f"{three_pm}/{three_pa}",
+                    '三分': f"{threepm}/{threepa}",
                     '助攻': assists,
                     '篮板': rebounds,
                     '失误': turnovers
                 })
             return result
 
-        # players[0] 是客队，players[1] 是主队（经实测确认）
+        # players[0] = 客队, players[1] = 主队
         if len(players) >= 1:
-            away_athletes = players[0].get('statistics', [{}])[0].get('athletes', [])
-            away_players_data = process_team_players(away_athletes)
+            away_players_data = process_team_section(players[0])
         if len(players) >= 2:
-            home_athletes = players[1].get('statistics', [{}])[0].get('athletes', [])
-            home_players_data = process_team_players(home_athletes)
+            home_players_data = process_team_section(players[1])
 
         return away_players_data, home_players_data
 
@@ -289,3 +310,4 @@ with col2:
         st.cache_data.clear()
         st.session_state.refresh_count += 1
         st.rerun()
+

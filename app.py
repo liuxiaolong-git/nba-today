@@ -2,8 +2,9 @@ import streamlit as st
 import requests
 import pandas as pd
 import pytz
-from datetime import datetime, timedelta
 import time
+from datetime import datetime, timedelta
+import json
 
 st.set_page_config(page_title="NBA赛程查询", page_icon="🏀", layout="wide")
 st.title("🏀 NBA实时赛程")
@@ -20,56 +21,52 @@ if 'expanded_games' not in st.session_state:
     st.session_state.expanded_games = {}
 if 'player_data_cache' not in st.session_state:
     st.session_state.player_data_cache = {}
-if 'schedule_cache' not in st.session_state:
-    st.session_state.schedule_cache = None
-if 'schedule_cache_time' not in st.session_state:
-    st.session_state.schedule_cache_time = None
 
 # 获取北京时间
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
 today_str = now_beijing.strftime('%Y-%m-%d')
 
-# NBA球队中英文对照表
+# NBA球队中英文对照表（去掉地名，只保留队名）
 NBA_TEAMS_CN = {
-    "Atlanta Hawks": "亚特兰大老鹰", "Boston Celtics": "波士顿凯尔特人",
-    "Brooklyn Nets": "布鲁克林篮网", "Charlotte Hornets": "夏洛特黄蜂",
-    "Chicago Bulls": "芝加哥公牛", "Cleveland Cavaliers": "克里夫兰骑士",
-    "Detroit Pistons": "底特律活塞", "Indiana Pacers": "印第安纳步行者",
-    "Miami Heat": "迈阿密热火", "Milwaukee Bucks": "密尔沃基雄鹿",
-    "New York Knicks": "纽约尼克斯", "Orlando Magic": "奥兰多魔术",
-    "Philadelphia 76ers": "费城76人", "Toronto Raptors": "多伦多猛龙",
-    "Washington Wizards": "华盛顿奇才", "Dallas Mavericks": "达拉斯独行侠",
-    "Denver Nuggets": "丹佛掘金", "Golden State Warriors": "金州勇士",
-    "Houston Rockets": "休斯顿火箭", "LA Clippers": "洛杉矶快船",
-    "Los Angeles Lakers": "洛杉矶湖人", "Memphis Grizzlies": "孟菲斯灰熊",
-    "Minnesota Timberwolves": "明尼苏达森林狼", "New Orleans Pelicans": "新奥尔良鹈鹕",
-    "Oklahoma City Thunder": "俄克拉荷马雷霆", "Phoenix Suns": "菲尼克斯太阳",
-    "Portland Trail Blazers": "波特兰开拓者", "Sacramento Kings": "萨克拉门托国王",
-    "San Antonio Spurs": "圣安东尼奥马刺", "Utah Jazz": "犹他爵士"
+    "Atlanta Hawks": "老鹰", "Boston Celtics": "凯尔特人",
+    "Brooklyn Nets": "篮网", "Charlotte Hornets": "黄蜂",
+    "Chicago Bulls": "公牛", "Cleveland Cavaliers": "骑士",
+    "Detroit Pistons": "活塞", "Indiana Pacers": "步行者",
+    "Miami Heat": "热火", "Milwaukee Bucks": "雄鹿",
+    "New York Knicks": "尼克斯", "Orlando Magic": "魔术",
+    "Philadelphia 76ers": "76人", "Toronto Raptors": "猛龙",
+    "Washington Wizards": "奇才", "Dallas Mavericks": "独行侠",
+    "Denver Nuggets": "掘金", "Golden State Warriors": "勇士",
+    "Houston Rockets": "火箭", "LA Clippers": "快船",
+    "Los Angeles Lakers": "湖人", "Memphis Grizzlies": "灰熊",
+    "Minnesota Timberwolves": "森林狼", "New Orleans Pelicans": "鹈鹕",
+    "Oklahoma City Thunder": "雷霆", "Phoenix Suns": "太阳",
+    "Portland Trail Blazers": "开拓者", "Sacramento Kings": "国王",
+    "San Antonio Spurs": "马刺", "Utah Jazz": "爵士"
 }
 
 # NBA球员中英文对照表
 NBA_PLAYERS_CN = {
-    "LeBron James": "勒布朗·詹姆斯", "Anthony Davis": "安东尼·戴维斯",
-    "Stephen Curry": "斯蒂芬·库里", "Klay Thompson": "克莱·汤普森",
-    "Kevin Durant": "凯文·杜兰特", "James Harden": "詹姆斯·哈登",
-    "Giannis Antetokounmpo": "扬尼斯·阿德托昆博", "Luka Doncic": "卢卡·东契奇",
-    "Nikola Jokic": "尼古拉·约基奇", "Joel Embiid": "乔尔·恩比德",
-    "Jayson Tatum": "杰森·塔图姆", "Damian Lillard": "达米安·利拉德",
-    "Kawhi Leonard": "科怀·伦纳德", "Paul George": "保罗·乔治",
-    "Donovan Mitchell": "多诺万·米切尔", "Trae Young": "特雷·杨",
-    "Zion Williamson": "蔡恩·威廉森", "Ja Morant": "贾·莫兰特",
-    "Devin Booker": "德文·布克", "Chris Paul": "克里斯·保罗",
-    "Kyrie Irving": "凯里·欧文", "Russell Westbrook": "拉塞尔·威斯布鲁克",
-    "Anthony Edwards": "安东尼·爱德华兹", "Jalen Brunson": "杰伦·布伦森",
+    "LeBron James": "詹姆斯", "Anthony Davis": "戴维斯",
+    "Stephen Curry": "库里", "Klay Thompson": "汤普森",
+    "Kevin Durant": "杜兰特", "James Harden": "哈登",
+    "Giannis Antetokounmpo": "字母哥", "Luka Doncic": "东契奇",
+    "Nikola Jokic": "约基奇", "Joel Embiid": "恩比德",
+    "Jayson Tatum": "塔图姆", "Damian Lillard": "利拉德",
+    "Kawhi Leonard": "伦纳德", "Paul George": "乔治",
+    "Donovan Mitchell": "米切尔", "Trae Young": "特雷杨",
+    "Zion Williamson": "威廉森", "Ja Morant": "莫兰特",
+    "Devin Booker": "布克", "Chris Paul": "保罗",
+    "Kyrie Irving": "欧文", "Russell Westbrook": "威少",
+    "Anthony Edwards": "爱德华兹", "Jalen Brunson": "布伦森",
     
     # 示例中的球员
-    "Darius Garland": "达柳斯·加兰", "Jaylon Tyson": "杰伦·泰森",
-    "Dean Wade": "迪安·韦德", "Thomas Bryant": "托马斯·布莱恩特",
-    "Jarrett Allen": "贾勒特·阿伦", "Lonzo Ball": "朗佐·鲍尔",
-    "Nae'Qwan Tomlin": "内昆·汤姆林", "De'Andre Hunter": "德安德烈·亨特",
-    "Craig Porter": "克雷格·波特"
+    "Darius Garland": "加兰", "Jaylon Tyson": "泰森",
+    "Dean Wade": "韦德", "Thomas Bryant": "布莱恩特",
+    "Jarrett Allen": "阿伦", "Lonzo Ball": "鲍尔",
+    "Nae'Qwan Tomlin": "汤姆林", "De'Andre Hunter": "亨特",
+    "Craig Porter": "波特"
 }
 
 def translate_player_name(english_name):
@@ -88,16 +85,9 @@ def translate_team_name(english_name):
     """将英文队名转换为中文"""
     return NBA_TEAMS_CN.get(english_name, english_name)
 
-def fetch_nba_schedule_cached(date_str):
-    """获取NBA赛程数据（带缓存）"""
-    cache_key = f"schedule_{date_str}"
-    
-    # 检查缓存是否有效（5秒内）
-    if (st.session_state.schedule_cache_time and 
-        cache_key in st.session_state.player_data_cache and
-        (datetime.now() - st.session_state.schedule_cache_time).total_seconds() < 5):
-        return st.session_state.player_data_cache[cache_key]
-    
+@st.cache_data(ttl=10)
+def fetch_nba_schedule(date_str):
+    """获取NBA赛程数据"""
     try:
         eastern_tz = pytz.timezone('America/New_York')
         beijing_date = datetime.strptime(date_str, '%Y-%m-%d')
@@ -113,85 +103,69 @@ def fetch_nba_schedule_cached(date_str):
         
         headers = {'User-Agent': 'Mozilla/5.0'}
         
-        response = requests.get(url, params=params, headers=headers, timeout=5)
+        response = requests.get(url, params=params, headers=headers, timeout=8)
         response.raise_for_status()
-        data = response.json()
-        
-        # 缓存数据
-        st.session_state.player_data_cache[cache_key] = data
-        st.session_state.schedule_cache_time = datetime.now()
-        
-        return data
+        return response.json()
         
     except Exception as e:
-        st.error(f"获取赛程失败: {e}")
         return None
 
-def fetch_game_details_cached(game_id):
-    """获取比赛详细数据（带缓存）"""
-    cache_key = f"game_{game_id}"
-    
-    # 检查缓存
-    if cache_key in st.session_state.player_data_cache:
-        cached_time = st.session_state.player_data_cache.get(f"{cache_key}_time")
-        if cached_time and (datetime.now() - cached_time).total_seconds() < 3:
-            return st.session_state.player_data_cache[cache_key]
-    
+def fetch_game_details(game_id):
+    """获取比赛详细数据，包括球员统计"""
     try:
         url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
         params = {'event': game_id}
         
         headers = {'User-Agent': 'Mozilla/5.0'}
         
-        response = requests.get(url, params=params, headers=headers, timeout=5)
+        response = requests.get(url, params=params, headers=headers, timeout=8)
         response.raise_for_status()
-        data = response.json()
-        
-        # 缓存数据
-        st.session_state.player_data_cache[cache_key] = data
-        st.session_state.player_data_cache[f"{cache_key}_time"] = datetime.now()
-        
-        return data
+        return response.json()
         
     except Exception as e:
         return None
 
-def parse_player_stats_fast(game_details, team_id):
-    """快速球员数据解析函数"""
+def parse_player_stats_detailed(game_details, team_id):
+    """详细球员数据解析函数 - 修复数据为0的问题"""
     players_data = []
     
     if not game_details:
         return players_data
     
-    # 尝试从boxscore中获取数据
+    # 尝试多种方法解析球员数据
+    # 方法1：从boxscore -> players获取
     boxscore = game_details.get('boxscore', {})
     players = boxscore.get('players', [])
     
     for team_players in players:
         if str(team_players.get('team', {}).get('id')) == str(team_id):
-            statistics = team_players.get('statistics', [])
+            # 初始化球员数据字典
+            player_stats_dict = {}
             
-            # 首先收集所有球员
-            player_map = {}
-            for stat_category in statistics:
+            # 先收集所有球员的基本信息
+            for stat_category in team_players.get('statistics', []):
                 athletes = stat_category.get('athletes', [])
+                
                 for athlete_info in athletes:
                     player = athlete_info.get('athlete', {})
                     if player:
                         player_id = player.get('id', '')
-                        if player_id not in player_map:
-                            player_name = player.get('displayName', '')
-                            player_map[player_id] = {
+                        player_name = player.get('displayName', '')
+                        
+                        if player_id not in player_stats_dict:
+                            player_stats_dict[player_id] = {
                                 '球员': translate_player_name(player_name),
                                 '出场时间': '0:00',
                                 '得分': '0',
+                                '投篮': '0-0',
+                                '三分': '0-0',
                                 '助攻': '0',
                                 '篮板': '0',
                                 '失误': '0'
                             }
             
-            # 然后填充统计数据
-            for stat_category in statistics:
+            # 然后填充具体统计数据
+            for stat_category in team_players.get('statistics', []):
                 category_name = stat_category.get('name', '')
                 athletes = stat_category.get('athletes', [])
                 
@@ -201,24 +175,138 @@ def parse_player_stats_fast(game_details, team_id):
                     
                     if player and stats:
                         player_id = player.get('id', '')
-                        if player_id in player_map:
-                            if category_name == 'minutes' and len(stats) > 0:
-                                player_map[player_id]['出场时间'] = stats[0] or '0:00'
-                            elif category_name == 'points' and len(stats) > 0:
-                                player_map[player_id]['得分'] = stats[0] or '0'
-                            elif category_name == 'assists' and len(stats) > 0:
-                                player_map[player_id]['助攻'] = stats[0] or '0'
-                            elif category_name == 'rebounds' and len(stats) > 0:
-                                player_map[player_id]['篮板'] = stats[0] or '0'
-                            elif category_name == 'turnovers' and len(stats) > 0:
-                                player_map[player_id]['失误'] = stats[0] or '0'
+                        if player_id in player_stats_dict:
+                            if category_name == 'minutes':
+                                # 出场时间
+                                if len(stats) > 0 and stats[0]:
+                                    player_stats_dict[player_id]['出场时间'] = format_minutes(stats[0])
+                            elif category_name == 'points':
+                                # 得分
+                                if len(stats) > 0 and stats[0]:
+                                    player_stats_dict[player_id]['得分'] = str(stats[0])
+                            elif category_name == 'assists':
+                                # 助攻
+                                if len(stats) > 0 and stats[0]:
+                                    player_stats_dict[player_id]['助攻'] = str(stats[0])
+                            elif category_name == 'rebounds':
+                                # 篮板
+                                if len(stats) > 0 and stats[0]:
+                                    player_stats_dict[player_id]['篮板'] = str(stats[0])
+                            elif category_name == 'turnovers':
+                                # 失误
+                                if len(stats) > 0 and stats[0]:
+                                    player_stats_dict[player_id]['失误'] = str(stats[0])
+                            elif category_name == 'fieldGoals':
+                                # 投篮
+                                if len(stats) > 1 and stats[0] is not None and stats[1] is not None:
+                                    made = int(stats[0]) if stats[0] is not None else 0
+                                    attempted = int(stats[1]) if stats[1] is not None else 0
+                                    player_stats_dict[player_id]['投篮'] = f"{made}-{attempted}"
+                            elif category_name == 'threePointFieldGoals':
+                                # 三分
+                                if len(stats) > 1 and stats[0] is not None and stats[1] is not None:
+                                    made = int(stats[0]) if stats[0] is not None else 0
+                                    attempted = int(stats[1]) if stats[1] is not None else 0
+                                    player_stats_dict[player_id]['三分'] = f"{made}-{attempted}"
             
-            players_data = list(player_map.values())
+            # 将字典转换为列表
+            players_data = list(player_stats_dict.values())
             break
     
+    # 方法2：如果上面没获取到，尝试从其他位置获取
+    if not players_data:
+        # 尝试从header -> competitions -> competitors获取
+        header = game_details.get('header', {})
+        competitions = header.get('competitions', [])
+        
+        for competition in competitions:
+            competitors = competition.get('competitors', [])
+            
+            for competitor in competitors:
+                if str(competitor.get('team', {}).get('id')) == str(team_id):
+                    # 获取球员名单
+                    athletes = competitor.get('athletes', [])
+                    
+                    for athlete in athletes:
+                        player = athlete.get('athlete', {})
+                        if player:
+                            player_name = player.get('displayName', '')
+                            stats = athlete.get('stats', [])
+                            
+                            player_data = {
+                                '球员': translate_player_name(player_name),
+                                '出场时间': '0:00',
+                                '得分': '0',
+                                '投篮': '0-0',
+                                '三分': '0-0',
+                                '助攻': '0',
+                                '篮板': '0',
+                                '失误': '0'
+                            }
+                            
+                            # 解析统计数据
+                            if stats:
+                                for stat in stats:
+                                    stat_name = stat.get('name', '')
+                                    stat_value = stat.get('value', '')
+                                    
+                                    if stat_name == 'MIN' and stat_value:
+                                        player_data['出场时间'] = stat_value
+                                    elif stat_name == 'PTS' and stat_value:
+                                        player_data['得分'] = stat_value
+                                    elif stat_name == 'AST' and stat_value:
+                                        player_data['助攻'] = stat_value
+                                    elif stat_name == 'REB' and stat_value:
+                                        player_data['篮板'] = stat_value
+                                    elif stat_name == 'TO' and stat_value:
+                                        player_data['失误'] = stat_value
+                                    elif stat_name == 'FGM' and stat_value:
+                                        fgm = stat_value
+                                        fga = next((s.get('value', '0') for s in stats if s.get('name') == 'FGA'), '0')
+                                        player_data['投篮'] = f"{fgm}-{fga}"
+                                    elif stat_name == 'FG3M' and stat_value:
+                                        fg3m = stat_value
+                                        fg3a = next((s.get('value', '0') for s in stats if s.get('name') == 'FG3A'), '0')
+                                        player_data['三分'] = f"{fg3m}-{fg3a}"
+                            
+                            players_data.append(player_data)
+    
     # 按得分排序
-    players_data.sort(key=lambda x: int(str(x['得分']).replace(':', '').split('-')[0] if isinstance(x['得分'], str) else 0), reverse=True)
+    players_data.sort(key=lambda x: int(str(x['得分']).replace('-', ' ').split()[0] if '-' in str(x['得分']) else str(x['得分'])), reverse=True)
+    
     return players_data
+
+def format_minutes(minutes_str):
+    """格式化出场时间"""
+    if not minutes_str:
+        return '0:00'
+    
+    if isinstance(minutes_str, str) and ':' in minutes_str:
+        return minutes_str
+    
+    try:
+        # 如果是数字，转换为MM:SS格式
+        total_seconds = int(float(minutes_str) * 60)
+        mins = total_seconds // 60
+        secs = total_seconds % 60
+        return f"{mins}:{secs:02d}"
+    except:
+        return str(minutes_str)
+
+def preload_player_data(events):
+    """预加载球员数据"""
+    for event in events:
+        event_id = event.get('id', '')
+        status_detail = event.get('status', {}).get('type', {}).get('state', 'pre')
+        
+        # 只预加载进行中或已结束的比赛数据
+        if status_detail in ['in', 'post'] and event_id not in st.session_state.player_data_cache:
+            try:
+                game_details = fetch_game_details(event_id)
+                if game_details:
+                    st.session_state.player_data_cache[event_id] = game_details
+            except:
+                pass
 
 # 侧边栏配置
 with st.sidebar:
@@ -248,14 +336,13 @@ with st.sidebar:
     st.markdown("**📊 数据说明**")
     st.caption(f"• 球员已收录: {len(NBA_PLAYERS_CN)}人")
     st.caption("• 未收录球员显示英文名")
-    st.caption("• 数据已缓存优化")
+    st.caption("• 投篮格式: 命中数-出手数")
 
 # 主界面
 st.subheader(f"📅 {selected_date.strftime('%Y-%m-%d')} 赛程")
 
-# 获取数据（使用缓存）
-start_time = time.time()
-schedule_data = fetch_nba_schedule_cached(selected_date.strftime('%Y-%m-%d'))
+# 获取赛程数据
+schedule_data = fetch_nba_schedule(selected_date.strftime('%Y-%m-%d'))
 
 if not schedule_data:
     st.error("无法获取赛程数据，请检查网络连接")
@@ -267,12 +354,18 @@ if not events:
     st.info("今日暂无NBA比赛安排")
     st.stop()
 
+# 预加载球员数据
+preload_player_data(events)
+
 # 统计比赛状态
 live_count = 0
 for event in events:
     status_detail = event.get('status', {}).get('type', {}).get('state', 'pre')
     if status_detail == 'in':
         live_count += 1
+
+if live_count > 0:
+    st.info(f"🟢 有 {live_count} 场比赛正在进行中")
 
 # 显示比赛列表
 for i, event in enumerate(events):
@@ -283,10 +376,13 @@ for i, event in enumerate(events):
     # 比赛状态
     if status_detail == 'in':
         status_badge = "🟢 进行中"
+        status_color = "#10B981"
     elif status_detail == 'post':
         status_badge = "⚫ 已结束"
+        status_color = "#6B7280"
     else:
         status_badge = "⏳ 未开始"
+        status_color = "#3B82F6"
     
     # 比赛时间
     date_str = event.get('date', '')
@@ -326,22 +422,28 @@ for i, event in enumerate(events):
                 with score_col1:
                     st.markdown(f"**{away_name_cn}**")
                 with score_col2:
-                    st.markdown(f"**{away_score}**")
+                    st.markdown(f"<span style='color:{status_color}; font-weight:bold'>{away_score}</span>", unsafe_allow_html=True)
                 with score_col3:
                     st.markdown("**VS**")
                 with score_col4:
-                    st.markdown(f"**{home_score}**")
+                    st.markdown(f"<span style='color:{status_color}; font-weight:bold'>{home_score}</span>", unsafe_allow_html=True)
                 with score_col5:
                     st.markdown(f"**{home_name_cn}**")
                 
                 # 第二行：状态和时间
-                info_col1, info_col2 = st.columns([3, 1])
-                with info_col1:
+                col_info1, col_info2 = st.columns([3, 1])
+                with col_info1:
                     st.caption(f"{status_badge} | ⏰ {game_time}")
-                with info_col2:
+                with col_info2:
                     if status_detail in ['in', 'post']:
+                        # 检查球员数据是否可用
+                        has_player_data = event_id in st.session_state.player_data_cache
+                        button_disabled = not has_player_data
+                        
                         button_key = f"player_btn_{event_id}"
-                        if st.button("📊 球员数据", key=button_key, type="secondary"):
+                        button_label = "📊 显示球员数据" if not st.session_state.expanded_games.get(event_id, False) else "📊 隐藏球员数据"
+                        
+                        if st.button(button_label, key=button_key, type="secondary", disabled=button_disabled):
                             if event_id in st.session_state.expanded_games:
                                 del st.session_state.expanded_games[event_id]
                             else:
@@ -349,57 +451,58 @@ for i, event in enumerate(events):
                             st.rerun()
                 
                 # 第三行：球员数据（如果展开）
-                if event_id in st.session_state.expanded_games and status_detail in ['in', 'post']:
-                    # 预加载球员数据（不显示spinner）
-                    game_details = fetch_game_details_cached(event_id)
+                if st.session_state.expanded_games.get(event_id, False) and status_detail in ['in', 'post']:
+                    # 从缓存或API获取球员数据
+                    game_details = st.session_state.player_data_cache.get(event_id)
+                    
+                    if not game_details:
+                        # 如果缓存中没有，则重新获取
+                        game_details = fetch_game_details(event_id)
+                        if game_details:
+                            st.session_state.player_data_cache[event_id] = game_details
                     
                     if game_details:
-                        # 快速解析球员数据
-                        away_players = parse_player_stats_fast(game_details, away_id)
-                        home_players = parse_player_stats_fast(game_details, home_id)
+                        # 解析球员数据
+                        away_players = parse_player_stats_detailed(game_details, away_id)
+                        home_players = parse_player_stats_detailed(game_details, home_id)
                         
                         if away_players or home_players:
-                            # 使用tabs显示球员数据
-                            tab1, tab2 = st.tabs([f"{away_name_cn} 球员", f"{home_name_cn} 球员"])
+                            # 使用两个垂直排列的容器显示球员数据
+                            st.markdown(f"**{away_name_cn} 球员数据**")
+                            if away_players:
+                                away_df = pd.DataFrame(away_players)
+                                # 确保列顺序正确
+                                column_order = ['球员', '出场时间', '得分', '投篮', '三分', '助攻', '篮板', '失误']
+                                available_columns = [col for col in column_order if col in away_df.columns]
+                                away_df = away_df[available_columns]
+                                
+                                st.dataframe(
+                                    away_df,
+                                    hide_index=True,
+                                    use_container_width=True,
+                                    height=200
+                                )
+                            else:
+                                st.info("暂无球员数据")
                             
-                            with tab1:
-                                if away_players:
-                                    # 清理数据格式
-                                    for player in away_players:
-                                        for key in ['得分', '助攻', '篮板', '失误']:
-                                            if isinstance(player[key], str) and '-' in player[key]:
-                                                # 处理 "3-7" 这样的格式，取第一个数字
-                                                player[key] = player[key].split('-')[0]
-                                    
-                                    away_df = pd.DataFrame(away_players)
-                                    st.dataframe(
-                                        away_df[['球员', '出场时间', '得分', '助攻', '篮板', '失误']],
-                                        hide_index=True,
-                                        use_container_width=True,
-                                        height=250
-                                    )
-                                else:
-                                    st.info("暂无球员数据")
-                            
-                            with tab2:
-                                if home_players:
-                                    # 清理数据格式
-                                    for player in home_players:
-                                        for key in ['得分', '助攻', '篮板', '失误']:
-                                            if isinstance(player[key], str) and '-' in player[key]:
-                                                player[key] = player[key].split('-')[0]
-                                    
-                                    home_df = pd.DataFrame(home_players)
-                                    st.dataframe(
-                                        home_df[['球员', '出场时间', '得分', '助攻', '篮板', '失误']],
-                                        hide_index=True,
-                                        use_container_width=True,
-                                        height=250
-                                    )
-                                else:
-                                    st.info("暂无球员数据")
+                            st.markdown(f"**{home_name_cn} 球员数据**")
+                            if home_players:
+                                home_df = pd.DataFrame(home_players)
+                                available_columns = [col for col in column_order if col in home_df.columns]
+                                home_df = home_df[available_columns]
+                                
+                                st.dataframe(
+                                    home_df,
+                                    hide_index=True,
+                                    use_container_width=True,
+                                    height=200
+                                )
+                            else:
+                                st.info("暂无球员数据")
                         else:
                             st.info("球员数据暂不可用")
+                    else:
+                        st.info("无法获取球员数据")
     
     # 比赛之间的分隔线
     if i < len(events) - 1:

@@ -331,8 +331,8 @@ def parse_player_stats(game_data):
         if not players_section or len(players_section) < 2:
             return [], []
 
-away_players = players_section[0]
-home_players = players_section[1]
+        home_players = players_section[1]
+        away_players = players_section[0]
 
         def extract_team_data(team_data):
             stats_list = team_data.get('statistics', [])
@@ -495,6 +495,3 @@ col1.caption(f"更新于: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
 if col2.button("🔄 刷新"):
     st.cache_data.clear()
     st.rerun()
-
-
-

@@ -178,7 +178,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏀 NBA实时赛程")
+st.title("🏀 NBA实时赛程(小宝子)")
 
 # 初始化 session state
 if 'refresh_count' not in st.session_state:
@@ -734,3 +734,4 @@ with footer_cols[0]:
 with footer_cols[1]:
     if st.button("⬆️ 返回顶部", use_container_width=True):
         st.rerun()
+

@@ -86,23 +86,13 @@ def extract_stat_by_name(stats_list, stat_names):
 
 def parse_player_stats(game_data):
     try:
-        # 获取主客场信息（用于 fallback）
-        header = game_data.get('header', {})
-        home_team_name = header.get('homeTeam', {}).get('displayName', '')
-        away_team_name = header.get('awayTeam', {}).get('displayName', '')
-        home_team_id = str(header.get('homeTeam', {}).get('id', '')).strip()
-        away_team_id = str(header.get('awayTeam', {}).get('id', '')).strip()
-
-        home_data, away_data = [], []
-
+        away_data, home_data = [], []
         players_section = game_data.get('boxscore', {}).get('players', [])
         if not players_section:
             return [], []
 
-        for team_data in players_section:
-            team_info = team_data.get('team', {})
-            team_id = str(team_info.get('id', '')).strip()
-            team_name = team_info.get('displayName', '').strip()
+        for idx, team_data in enumerate(players_section[:2]):
+            team_name = team_data.get('team', {}).get('displayName', '')
             stats_list = team_data.get('statistics', [])
             if not stats_list:
                 continue
@@ -117,11 +107,13 @@ def parse_player_stats(game_data):
                 if not name or not raw_vals:
                     continue
 
+                # 构建字段映射
                 stat_map = {}
                 for i, label in enumerate(labels):
                     if i < len(raw_vals):
                         stat_map[label] = raw_vals[i]
 
+                # 解析投篮: 可能是 "11-21" 或 "11/21"
                 def parse_shot(s):
                     s = str(s).replace('/', '-').strip()
                     if '-' in s:
@@ -134,6 +126,7 @@ def parse_player_stats(game_data):
                 threepm, threepa = parse_shot(stat_map.get('3PM-A', stat_map.get('3PT', '0-0')))
                 ftm, fta = parse_shot(stat_map.get('FTM-A', stat_map.get('FT', '0-0')))
 
+                # 其他字段（通常是纯数字）
                 def get_num(key, default='0'):
                     val = stat_map.get(key, default)
                     return str(val) if str(val).replace('.', '').isdigit() else default
@@ -155,23 +148,10 @@ def parse_player_stats(game_data):
                     '助攻': ast,
                     '失误': tov
                 })
-
-            # ✅ 第一优先级：用 ID 匹配
-            assigned = False
-            if team_id == away_team_id:
+            if idx == 0:
                 away_data = parsed
-                assigned = True
-            elif team_id == home_team_id:
+            else:
                 home_data = parsed
-                assigned = True
-
-            # ✅ 第二优先级：ID 失败？用名称匹配（模糊）
-            if not assigned:
-                if away_team_name and away_team_name in team_name or team_name in away_team_name:
-                    away_data = parsed
-                elif home_team_name and home_team_name in team_name or team_name in home_team_name:
-                    home_data = parsed
-
         return away_data, home_data
     except Exception as e:
         st.session_state.debug = f"Parse error: {str(e)}"
@@ -271,6 +251,7 @@ col1.caption(f"更新于: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
 if col2.button("🔄 刷新"):
     st.cache_data.clear()
     st.rerun()
+
 
 
 

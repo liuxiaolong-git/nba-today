@@ -89,9 +89,9 @@ def fetch_player_stats(event_id):
         return None
 
 def format_time(time_str):
-    if not time_str or time_str == '0':
+    if not time_str or time_str in ('0', '0:00', '--', '', 'DNP', 'N/A'):
         return '0:00'
-    s = str(time_str)
+    s = str(time_str).strip()
     if ':' in s:
         return s
     try:
@@ -113,34 +113,37 @@ def parse_player_stats(game_data):
             stats_sections = team_section.get('statistics', [])
             if not stats_sections:
                 return []
-            main_stat = stats_sections[0]  # 总览统计
+            main_stat = stats_sections[0]
             labels = main_stat.get('labels', [])
             athletes = main_stat.get('athletes', [])
             
             if not labels or not athletes:
                 return []
 
-            # 构建 label -> index 映射
             label_to_index = {label: i for i, label in enumerate(labels)}
-            
             result = []
+            
             for ath in athletes:
                 athlete = ath.get('athlete', {})
                 stats = ath.get('stats', [])
-                if not athlete or len(stats) <= max(label_to_index.values(), default=0):
+                if not athlete:
+                    continue
+                if len(stats) <= max(label_to_index.values()):
                     continue
 
                 def get_stat(label, default='0'):
                     idx = label_to_index.get(label)
-                    if idx is not None and idx < len(stats):
+                    if idx is not None and 0 <= idx < len(stats):
                         val = stats[idx]
-                        # 处理百分比或空值
-                        if val == '' or val == '--' or val == 'N/A':
+                        if val in ('', '--', 'N/A', None):
                             return default
                         return str(val)
                     return default
 
-                name = athlete.get('displayName', '')
+                name = athlete.get('displayName', '').strip()
+                if not name:
+                    continue
+
                 minutes = format_time(get_stat('MIN'))
                 points = get_stat('PTS')
                 assists = get_stat('AST')
@@ -163,7 +166,6 @@ def parse_player_stats(game_data):
                 })
             return result
 
-        # players[0] = 客队, players[1] = 主队
         if len(players) >= 1:
             away_players_data = process_team_section(players[0])
         if len(players) >= 2:
@@ -235,7 +237,6 @@ for i, event in enumerate(events):
     if len(competitors) < 2:
         continue
 
-    # competitors[0] = 客队, [1] = 主队
     away_team = competitors[0].get('team', {})
     home_team = competitors[1].get('team', {})
 
@@ -310,4 +311,3 @@ with col2:
         st.cache_data.clear()
         st.session_state.refresh_count += 1
         st.rerun()
-

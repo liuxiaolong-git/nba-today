@@ -33,21 +33,10 @@ st.markdown("""
         }
         
         /* 简化表格 - 默认只显示三列 */
-        .simple-table {
-            width: 100%;
-            font-size: 13px;
-        }
-        
-        .simple-table th, .simple-table td {
-            padding: 6px 4px;
-            text-align: left;
-            border-bottom: 1px solid #e0e0e0;
-        }
-        
-        .simple-table th {
-            font-weight: bold;
-            color: #666;
-            background-color: #f8f9fa;
+        .simple-table-container {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin: 8px 0;
         }
         
         /* 完整表格容器 - 水平滚动 */
@@ -59,15 +48,23 @@ st.markdown("""
             border: 1px solid #e0e0e0;
         }
         
-        /* 完整表格 */
+        /* 数据表格优化 */
         .dataframe {
             font-size: 12px !important;
-            min-width: 700px;
         }
         
         .dataframe th, .dataframe td {
             padding: 6px 4px !important;
             white-space: nowrap;
+        }
+        
+        /* 简化表格的特殊样式 */
+        .simple-table .dataframe {
+            min-width: 300px !important; /* 简化表格只需要较小宽度 */
+        }
+        
+        .full-table .dataframe {
+            min-width: 700px !important;
         }
         
         /* 按钮优化 */
@@ -146,6 +143,12 @@ st.markdown("""
             font-size: 14px !important;
             padding: 8px 0 !important;
         }
+        
+        /* 高亮得分 */
+        .high-score {
+            font-weight: bold;
+            color: #e53935;
+        }
     }
     
     /* 通用优化 */
@@ -168,20 +171,14 @@ st.markdown("""
         border-left: 4px solid #2196F3 !important;
     }
     
-    /* 得分高亮 */
-    .high-score {
-        font-weight: bold;
-        color: #e53935;
-    }
-    
-    /* 表格列宽调整 */
-    .simple-table th:nth-child(1) { width: 50%; } /* 球员 */
-    .simple-table th:nth-child(2) { width: 25%; } /* 时间 */
-    .simple-table th:nth-child(3) { width: 25%; } /* 得分 */
+    /* 简化表格的列宽调整 */
+    .simple-table-container .dataframe th:nth-child(1) { min-width: 100px; } /* 球员 */
+    .simple-table-container .dataframe th:nth-child(2) { min-width: 60px; } /* 时间 */
+    .simple-table-container .dataframe th:nth-child(3) { min-width: 60px; } /* 得分 */
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏀 NBA实时赛程(小包子)")
+st.title("🏀 NBA实时赛程")
 
 # 初始化 session state
 if 'refresh_count' not in st.session_state:
@@ -483,37 +480,32 @@ def display_simple_table(players_data, team_name):
     # 只取前10名球员（移动端节省空间）
     players_data = players_data[:10]
     
-    # 创建简化的HTML表格
-    html = f"""
-    <div class="simple-table">
-        <table style="width:100%">
-            <thead>
-                <tr>
-                    <th>球员</th>
-                    <th>时间</th>
-                    <th>得分</th>
-                </tr>
-            </thead>
-            <tbody>
-    """
-    
+    # 创建只包含三列的DataFrame
+    simple_data = []
     for player in players_data:
-        score_class = "high-score" if safe_int(player['得分'], 0) >= 20 else ""
-        html += f"""
-            <tr>
-                <td>{player['球员']}</td>
-                <td>{player['时间']}</td>
-                <td class="{score_class}">{player['得分']}</td>
-            </tr>
-        """
+        simple_data.append({
+            '球员': player['球员'],
+            '时间': player['时间'],
+            '得分': player['得分']
+        })
     
-    html += """
-            </tbody>
-        </table>
-    </div>
-    """
+    df = pd.DataFrame(simple_data)
     
-    st.markdown(html, unsafe_allow_html=True)
+    if not df.empty:
+        st.markdown('<div class="simple-table-container">', unsafe_allow_html=True)
+        st.dataframe(
+            df,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "球员": st.column_config.TextColumn(width="medium"),
+                "时间": st.column_config.TextColumn(width="small"),
+                "得分": st.column_config.NumberColumn(width="small")
+            }
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.info("暂无球员数据")
 
 # ====== 完整的表格显示函数 ======
 def display_full_table(players_data):
@@ -669,6 +661,7 @@ for i, event in enumerate(events):
                     with tab1:
                         if away_p:
                             # 默认显示简化表格
+                            st.markdown(f"**{away_name}**")
                             display_simple_table(away_p, away_name)
                             
                             # 展开/收起详细数据按钮
@@ -681,8 +674,12 @@ for i, event in enumerate(events):
                             
                             with col_btn2:
                                 if st.button("📈 得分榜", key=f"score_away_{event['id']}", use_container_width=True):
-                                    # 可以添加得分榜功能
-                                    pass
+                                    # 显示得分前三名
+                                    top_scorers = sorted(away_p, key=lambda x: safe_int(x['得分'], 0), reverse=True)[:3]
+                                    if top_scorers:
+                                        st.info("得分前三:")
+                                        for idx, player in enumerate(top_scorers, 1):
+                                            st.write(f"{idx}. {player['球员']} - {player['得分']}分")
                             
                             # 如果展开，显示完整表格
                             if st.session_state.expanded_games[game_key]['away_expanded']:
@@ -694,6 +691,7 @@ for i, event in enumerate(events):
                     with tab2:
                         if home_p:
                             # 默认显示简化表格
+                            st.markdown(f"**{home_name}**")
                             display_simple_table(home_p, home_name)
                             
                             # 展开/收起详细数据按钮
@@ -706,8 +704,12 @@ for i, event in enumerate(events):
                             
                             with col_btn2:
                                 if st.button("📈 得分榜", key=f"score_home_{event['id']}", use_container_width=True):
-                                    # 可以添加得分榜功能
-                                    pass
+                                    # 显示得分前三名
+                                    top_scorers = sorted(home_p, key=lambda x: safe_int(x['得分'], 0), reverse=True)[:3]
+                                    if top_scorers:
+                                        st.info("得分前三:")
+                                        for idx, player in enumerate(top_scorers, 1):
+                                            st.write(f"{idx}. {player['球员']} - {player['得分']}分")
                             
                             # 如果展开，显示完整表格
                             if st.session_state.expanded_games[game_key]['home_expanded']:

@@ -108,7 +108,6 @@ def parse_player_stats(game_data):
         away_players_data = []
         home_players_data = []
         
-        # 修正: 交换主客队球员数据顺序
         # 根据ESPN API，players[0]是主队，players[1]是客队
         home_team_players = players[0].get('statistics', [{}])[0].get('athletes', [])
         away_team_players = players[1].get('statistics', [{}])[0].get('athletes', [])
@@ -117,11 +116,13 @@ def parse_player_stats(game_data):
         for player in home_team_players:
             athlete = player.get('athlete', {})
             stats = player.get('stats', [])
-            if athlete and stats:
+            if athlete and stats and len(stats) >= 9:
                 player_name = athlete.get('displayName', '')
                 
                 # 解析统计数据
-                # 索引映射: 0=出场时间, 1=得分, 2=投篮命中, 3=投篮出手, 4=三分命中, 5=三分出手, 6=篮板, 7=助攻, 8=失误
+                # 根据ESPN API文档，stats数组的索引顺序是：
+                # 0: MIN (出场时间), 1: PTS (得分), 2: FGM (投篮命中), 3: FGA (投篮出手), 
+                # 4: 3PM (三分命中), 5: 3PA (三分出手), 6: REB (篮板), 7: AST (助攻), 8: TO (失误)
                 time_played = format_time(stats[0]) if len(stats) > 0 else '0:00'
                 points = stats[1] if len(stats) > 1 else '0'
                 fgm = stats[2] if len(stats) > 2 else '0'
@@ -132,13 +133,12 @@ def parse_player_stats(game_data):
                 assists = stats[7] if len(stats) > 7 else '0'
                 turnovers = stats[8] if len(stats) > 8 else '0'
                 
-                # 修正投篮格式: 使用"命中/出手"格式
                 player_info = {
                     '球员': player_name,
                     '出场时间': time_played,
                     '得分': str(points),
-                    '投篮': f"{fgm}/{fga}",  # 修正格式
-                    '三分': f"{three_pm}/{three_pa}",  # 修正格式
+                    '投篮': f"{fgm}/{fga}",
+                    '三分': f"{three_pm}/{three_pa}",
                     '助攻': str(assists),
                     '篮板': str(rebounds),
                     '失误': str(turnovers)
@@ -149,7 +149,7 @@ def parse_player_stats(game_data):
         for player in away_team_players:
             athlete = player.get('athlete', {})
             stats = player.get('stats', [])
-            if athlete and stats:
+            if athlete and stats and len(stats) >= 9:
                 player_name = athlete.get('displayName', '')
                 
                 # 解析统计数据
@@ -167,8 +167,8 @@ def parse_player_stats(game_data):
                     '球员': player_name,
                     '出场时间': time_played,
                     '得分': str(points),
-                    '投篮': f"{fgm}/{fga}",  # 修正格式
-                    '三分': f"{three_pm}/{three_pa}",  # 修正格式
+                    '投篮': f"{fgm}/{fga}",
+                    '三分': f"{three_pm}/{three_pa}",
                     '助攻': str(assists),
                     '篮板': str(rebounds),
                     '失误': str(turnovers)
@@ -177,6 +177,23 @@ def parse_player_stats(game_data):
         
         return away_players_data, home_players_data
     except Exception as e:
+        # 调试信息
+        if 'debug_info' not in st.session_state:
+            st.session_state.debug_info = []
+        
+        error_info = f"解析球员数据错误: {str(e)}"
+        if game_data:
+            error_info += f" | 数据包含boxscore: {'boxscore' in game_data}"
+            if 'boxscore' in game_data and 'players' in game_data['boxscore']:
+                players = game_data['boxscore']['players']
+                error_info += f" | players长度: {len(players)}"
+                if len(players) > 0 and 'statistics' in players[0]:
+                    stats = players[0]['statistics']
+                    error_info += f" | 主队统计数: {len(stats)}"
+                    if stats and len(stats) > 0 and 'athletes' in stats[0]:
+                        error_info += f" | 主队球员数: {len(stats[0]['athletes'])}"
+        
+        st.session_state.debug_info.append(error_info)
         return [], []
 
 def format_time(time_str):
@@ -324,6 +341,12 @@ for i, event in enumerate(events):
                                         st.info("暂无球员数据")
                             else:
                                 st.warning("暂无球员数据")
+                                
+                                # 显示调试信息
+                                if 'debug_info' in st.session_state and st.session_state.debug_info:
+                                    with st.expander("查看调试信息"):
+                                        for info in st.session_state.debug_info:
+                                            st.text(info)
                         else:
                             st.warning("无法获取球员数据")
 

@@ -87,57 +87,72 @@ def extract_stat_by_name(stats_list, stat_names):
 def parse_player_stats(game_data):
     try:
         away_data, home_data = [], []
+        players_section = game_data.get('boxscore', {}).get('players', [])
+        if not players_section:
+            return [], []
 
-        # 尝试从 boxscore.teams 解析（ESPN 当前主力结构）
-        boxscore = game_data.get('boxscore', {})
-        teams = boxscore.get('teams', [])
-        if len(teams) >= 2:
-            for idx, team in enumerate(teams[:2]):
-                stats_section = team.get('statistics', {})
-                athletes = stats_section.get('athletes', [])
-                parsed = []
-                for ath in athletes:
-                    athlete = ath.get('athlete', {})
-                    name = athlete.get('displayName', '').strip()
-                    raw_stats = ath.get('stats', [])
-                    
-                    if not name or not isinstance(raw_stats, list) or len(raw_stats) < 19:
-                        continue
+        for idx, team_data in enumerate(players_section[:2]):
+            team_name = team_data.get('team', {}).get('displayName', '')
+            stats_list = team_data.get('statistics', [])
+            if not stats_list:
+                continue
+            main_stat = stats_list[0]
+            labels = main_stat.get('labels', [])
+            athletes = main_stat.get('athletes', [])
+            
+            parsed = []
+            for ath in athletes:
+                name = ath.get('athlete', {}).get('displayName', '').strip()
+                raw_vals = ath.get('stats', [])
+                if not name or not raw_vals:
+                    continue
 
-                    # 按固定索引提取
-                    def safe_str(x):
-                        return str(x) if x not in (None, '', 'null') else '0'
+                # 构建字段映射
+                stat_map = {}
+                for i, label in enumerate(labels):
+                    if i < len(raw_vals):
+                        stat_map[label] = raw_vals[i]
 
-                    minutes = safe_str(raw_stats[0])
-                    fgm = safe_str(raw_stats[1])
-                    fga = safe_str(raw_stats[2])
-                    threepm = safe_str(raw_stats[4])
-                    threepa = safe_str(raw_stats[5])
-                    ftm = safe_str(raw_stats[7])
-                    fta = safe_str(raw_stats[8])
-                    pts = safe_str(raw_stats[18])
-                    reb = safe_str(raw_stats[12])
-                    ast = safe_str(raw_stats[13])
-                    tov = safe_str(raw_stats[16])
+                # 解析投篮: 可能是 "11-21" 或 "11/21"
+                def parse_shot(s):
+                    s = str(s).replace('/', '-').strip()
+                    if '-' in s:
+                        parts = s.split('-')
+                        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                            return parts[0], parts[1]
+                    return '0', '0'
 
-                    parsed.append({
-                        '球员': name,
-                        '时间': format_time(minutes),
-                        '得分': pts,
-                        '投篮': f"{fgm}/{fga}",
-                        '三分': f"{threepm}/{threepa}",
-                        '罚球': f"{ftm}/{fta}",
-                        '篮板': reb,
-                        '助攻': ast,
-                        '失误': tov
-                    })
-                if idx == 0:
-                    away_data = parsed
-                else:
-                    home_data = parsed
-            return away_data, home_data
+                fgm, fga = parse_shot(stat_map.get('FGM-A', stat_map.get('FG', '0-0')))
+                threepm, threepa = parse_shot(stat_map.get('3PM-A', stat_map.get('3PT', '0-0')))
+                ftm, fta = parse_shot(stat_map.get('FTM-A', stat_map.get('FT', '0-0')))
 
-        return [], []
+                # 其他字段（通常是纯数字）
+                def get_num(key, default='0'):
+                    val = stat_map.get(key, default)
+                    return str(val) if str(val).replace('.', '').isdigit() else default
+
+                minutes = stat_map.get('MIN', '0')
+                pts = get_num('PTS')
+                reb = get_num('REB')
+                ast = get_num('AST')
+                tov = get_num('TO')
+
+                parsed.append({
+                    '球员': name,
+                    '时间': format_time(minutes),
+                    '得分': pts,
+                    '投篮': f"{fgm}/{fga}",
+                    '三分': f"{threepm}/{threepa}",
+                    '罚球': f"{ftm}/{fta}",
+                    '篮板': reb,
+                    '助攻': ast,
+                    '失误': tov
+                })
+            if idx == 0:
+                away_data = parsed
+            else:
+                home_data = parsed
+        return away_data, home_data
     except Exception as e:
         st.session_state.debug = f"Parse error: {str(e)}"
         return [], []
@@ -236,5 +251,6 @@ col1.caption(f"更新于: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
 if col2.button("🔄 刷新"):
     st.cache_data.clear()
     st.rerun()
+
 
 

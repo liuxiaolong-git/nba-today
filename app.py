@@ -86,10 +86,12 @@ def extract_stat_by_name(stats_list, stat_names):
 
 def parse_player_stats(game_data):
     try:
-        # 先获取主客场队伍 ID
+        # 获取主客场信息（用于 fallback）
         header = game_data.get('header', {})
-        home_team_id = str(header.get('homeTeam', {}).get('id', ''))
-        away_team_id = str(header.get('awayTeam', {}).get('id', ''))
+        home_team_name = header.get('homeTeam', {}).get('displayName', '')
+        away_team_name = header.get('awayTeam', {}).get('displayName', '')
+        home_team_id = str(header.get('homeTeam', {}).get('id', '')).strip()
+        away_team_id = str(header.get('awayTeam', {}).get('id', '')).strip()
 
         home_data, away_data = [], []
 
@@ -98,7 +100,9 @@ def parse_player_stats(game_data):
             return [], []
 
         for team_data in players_section:
-            team_id = str(team_data.get('team', {}).get('id', ''))
+            team_info = team_data.get('team', {})
+            team_id = str(team_info.get('id', '')).strip()
+            team_name = team_info.get('displayName', '').strip()
             stats_list = team_data.get('statistics', [])
             if not stats_list:
                 continue
@@ -152,12 +156,21 @@ def parse_player_stats(game_data):
                     '失误': tov
                 })
 
-            # 根据 team_id 分配到主队或客队
+            # ✅ 第一优先级：用 ID 匹配
+            assigned = False
             if team_id == away_team_id:
                 away_data = parsed
+                assigned = True
             elif team_id == home_team_id:
                 home_data = parsed
-            # 如果都匹配不上，暂且忽略（或可 fallback）
+                assigned = True
+
+            # ✅ 第二优先级：ID 失败？用名称匹配（模糊）
+            if not assigned:
+                if away_team_name and away_team_name in team_name or team_name in away_team_name:
+                    away_data = parsed
+                elif home_team_name and home_team_name in team_name or team_name in home_team_name:
+                    home_data = parsed
 
         return away_data, home_data
     except Exception as e:
@@ -258,6 +271,7 @@ col1.caption(f"更新于: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
 if col2.button("🔄 刷新"):
     st.cache_data.clear()
     st.rerun()
+
 
 
 

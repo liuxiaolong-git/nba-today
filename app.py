@@ -116,32 +116,78 @@ def parse_player_stats(game_data):
         for player in home_team_players:
             athlete = player.get('athlete', {})
             stats = player.get('stats', [])
-            if athlete and stats and len(stats) >= 9:
+            if athlete and stats:
                 player_name = athlete.get('displayName', '')
                 
-                # 解析统计数据
-                # 根据ESPN API文档，stats数组的索引顺序是：
-                # 0: MIN (出场时间), 1: PTS (得分), 2: FGM (投篮命中), 3: FGA (投篮出手), 
-                # 4: 3PM (三分命中), 5: 3PA (三分出手), 6: REB (篮板), 7: AST (助攻), 8: TO (失误)
-                time_played = format_time(stats[0]) if len(stats) > 0 else '0:00'
-                points = stats[1] if len(stats) > 1 else '0'
-                fgm = stats[2] if len(stats) > 2 else '0'
-                fga = stats[3] if len(stats) > 3 else '0'
-                three_pm = stats[4] if len(stats) > 4 else '0'
-                three_pa = stats[5] if len(stats) > 5 else '0'
-                rebounds = stats[6] if len(stats) > 6 else '0'
-                assists = stats[7] if len(stats) > 7 else '0'
-                turnovers = stats[8] if len(stats) > 8 else '0'
+                # 解析统计数据 - 正确的索引映射
+                # ESPN API返回的stats数组顺序可能有所不同，我们需要正确解析
+                # 通常顺序: 0=MIN, 1=FGM, 2=FGA, 3=FG3M, 4=FG3A, 5=FTM, 6=FTA, 7=REB, 8=AST, 9=STL, 10=BLK, 11=TO, 12=PF, 13=PTS
+                # 但实际可能需要根据实际情况调整
+                
+                # 先获取所有stats值
+                stats_values = [str(s) for s in stats]
+                
+                # 尝试不同的索引组合来找到正确的数据
+                # 方法1: 查找得分(PTS) - 通常是最后一个或第一个
+                points = '0'
+                if len(stats) >= 14:
+                    # 假设PTS在第13个位置
+                    points = stats_values[13]
+                elif len(stats) >= 2:
+                    # 尝试第二个位置
+                    points = stats_values[1]
+                
+                # 方法2: 查找出场时间(MIN) - 通常是第一个
+                time_played = format_time(stats_values[0]) if stats_values else '0:00'
+                
+                # 方法3: 查找投篮数据 - 需要更复杂的逻辑
+                fgm, fga, fg3m, fg3a, reb, ast, to = '0', '0', '0', '0', '0', '0', '0'
+                
+                # 尝试从原始数据中提取统计类别信息
+                # 如果有categories信息，可以使用它
+                if 'categories' in player:
+                    categories = player.get('categories', [])
+                    for category in categories:
+                        category_name = category.get('name', '')
+                        category_stats = category.get('stats', [])
+                        if category_name == 'fieldGoals':
+                            if len(category_stats) >= 2:
+                                fgm = category_stats[0]
+                                fga = category_stats[1]
+                        elif category_name == 'threePointFieldGoals':
+                            if len(category_stats) >= 2:
+                                fg3m = category_stats[0]
+                                fg3a = category_stats[1]
+                        elif category_name == 'rebounds':
+                            if len(category_stats) >= 1:
+                                reb = category_stats[0]
+                        elif category_name == 'assists':
+                            if len(category_stats) >= 1:
+                                ast = category_stats[0]
+                        elif category_name == 'turnovers':
+                            if len(category_stats) >= 1:
+                                to = category_stats[0]
+                
+                # 如果通过categories没有找到数据，尝试基于常见的数据长度进行解析
+                if fgm == '0' and fga == '0' and len(stats) >= 14:
+                    # 尝试常见的数据格式
+                    fgm = stats_values[1]  # FGM
+                    fga = stats_values[2]  # FGA
+                    fg3m = stats_values[3]  # FG3M
+                    fg3a = stats_values[4]  # FG3A
+                    reb = stats_values[7]  # REB
+                    ast = stats_values[8]  # AST
+                    to = stats_values[11]  # TO
                 
                 player_info = {
                     '球员': player_name,
                     '出场时间': time_played,
-                    '得分': str(points),
+                    '得分': points,
                     '投篮': f"{fgm}/{fga}",
-                    '三分': f"{three_pm}/{three_pa}",
-                    '助攻': str(assists),
-                    '篮板': str(rebounds),
-                    '失误': str(turnovers)
+                    '三分': f"{fg3m}/{fg3a}",
+                    '助攻': ast,
+                    '篮板': reb,
+                    '失误': to
                 }
                 home_players_data.append(player_info)
         
@@ -149,51 +195,68 @@ def parse_player_stats(game_data):
         for player in away_team_players:
             athlete = player.get('athlete', {})
             stats = player.get('stats', [])
-            if athlete and stats and len(stats) >= 9:
+            if athlete and stats:
                 player_name = athlete.get('displayName', '')
                 
                 # 解析统计数据
-                time_played = format_time(stats[0]) if len(stats) > 0 else '0:00'
-                points = stats[1] if len(stats) > 1 else '0'
-                fgm = stats[2] if len(stats) > 2 else '0'
-                fga = stats[3] if len(stats) > 3 else '0'
-                three_pm = stats[4] if len(stats) > 4 else '0'
-                three_pa = stats[5] if len(stats) > 5 else '0'
-                rebounds = stats[6] if len(stats) > 6 else '0'
-                assists = stats[7] if len(stats) > 7 else '0'
-                turnovers = stats[8] if len(stats) > 8 else '0'
+                stats_values = [str(s) for s in stats]
+                
+                points = '0'
+                if len(stats) >= 14:
+                    points = stats_values[13]
+                elif len(stats) >= 2:
+                    points = stats_values[1]
+                
+                time_played = format_time(stats_values[0]) if stats_values else '0:00'
+                
+                fgm, fga, fg3m, fg3a, reb, ast, to = '0', '0', '0', '0', '0', '0', '0'
+                
+                if 'categories' in player:
+                    categories = player.get('categories', [])
+                    for category in categories:
+                        category_name = category.get('name', '')
+                        category_stats = category.get('stats', [])
+                        if category_name == 'fieldGoals':
+                            if len(category_stats) >= 2:
+                                fgm = category_stats[0]
+                                fga = category_stats[1]
+                        elif category_name == 'threePointFieldGoals':
+                            if len(category_stats) >= 2:
+                                fg3m = category_stats[0]
+                                fg3a = category_stats[1]
+                        elif category_name == 'rebounds':
+                            if len(category_stats) >= 1:
+                                reb = category_stats[0]
+                        elif category_name == 'assists':
+                            if len(category_stats) >= 1:
+                                ast = category_stats[0]
+                        elif category_name == 'turnovers':
+                            if len(category_stats) >= 1:
+                                to = category_stats[0]
+                
+                if fgm == '0' and fga == '0' and len(stats) >= 14:
+                    fgm = stats_values[1]
+                    fga = stats_values[2]
+                    fg3m = stats_values[3]
+                    fg3a = stats_values[4]
+                    reb = stats_values[7]
+                    ast = stats_values[8]
+                    to = stats_values[11]
                 
                 player_info = {
                     '球员': player_name,
                     '出场时间': time_played,
-                    '得分': str(points),
+                    '得分': points,
                     '投篮': f"{fgm}/{fga}",
-                    '三分': f"{three_pm}/{three_pa}",
-                    '助攻': str(assists),
-                    '篮板': str(rebounds),
-                    '失误': str(turnovers)
+                    '三分': f"{fg3m}/{fg3a}",
+                    '助攻': ast,
+                    '篮板': reb,
+                    '失误': to
                 }
                 away_players_data.append(player_info)
         
         return away_players_data, home_players_data
     except Exception as e:
-        # 调试信息
-        if 'debug_info' not in st.session_state:
-            st.session_state.debug_info = []
-        
-        error_info = f"解析球员数据错误: {str(e)}"
-        if game_data:
-            error_info += f" | 数据包含boxscore: {'boxscore' in game_data}"
-            if 'boxscore' in game_data and 'players' in game_data['boxscore']:
-                players = game_data['boxscore']['players']
-                error_info += f" | players长度: {len(players)}"
-                if len(players) > 0 and 'statistics' in players[0]:
-                    stats = players[0]['statistics']
-                    error_info += f" | 主队统计数: {len(stats)}"
-                    if stats and len(stats) > 0 and 'athletes' in stats[0]:
-                        error_info += f" | 主队球员数: {len(stats[0]['athletes'])}"
-        
-        st.session_state.debug_info.append(error_info)
         return [], []
 
 def format_time(time_str):
@@ -341,12 +404,6 @@ for i, event in enumerate(events):
                                         st.info("暂无球员数据")
                             else:
                                 st.warning("暂无球员数据")
-                                
-                                # 显示调试信息
-                                if 'debug_info' in st.session_state and st.session_state.debug_info:
-                                    with st.expander("查看调试信息"):
-                                        for info in st.session_state.debug_info:
-                                            st.text(info)
                         else:
                             st.warning("无法获取球员数据")
 

@@ -3,10 +3,11 @@ import requests
 import pandas as pd
 import pytz
 from datetime import datetime, timedelta
+import time
 
 # 移动端优化配置
 st.set_page_config(
-    page_title="NBA赛程查询(李菲同学)", 
+    page_title="NBA赛程查询(菲同学)", 
     page_icon="🏀", 
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -60,11 +61,20 @@ st.markdown("""
         
         /* 简化表格的特殊样式 */
         .simple-table .dataframe {
-            min-width: 300px !important; /* 简化表格只需要较小宽度 */
+            min-width: 300px !important;
         }
         
         .full-table .dataframe {
             min-width: 700px !important;
+        }
+        
+        /* 自动刷新控制面板 */
+        .refresh-panel {
+            background-color: #f8f9fa;
+            border-radius: 10px;
+            padding: 10px;
+            margin-top: 10px;
+            border: 1px solid #dee2e6;
         }
         
         /* 按钮优化 */
@@ -119,35 +129,25 @@ st.markdown("""
             color: #666;
         }
         
-        /* 展开详细数据按钮 */
-        .detail-btn {
-            font-size: 12px !important;
-            padding: 4px 10px !important;
-            margin: 4px 0 !important;
-            width: auto !important;
+        /* 倒计时 */
+        .countdown {
+            font-weight: bold;
+            color: #2196F3;
+            font-size: 13px;
+        }
+        
+        /* 自动刷新状态 */
+        .auto-refresh-on {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        .auto-refresh-off {
+            color: #9E9E9E;
         }
         
         /* 分隔线 */
         .stDivider {
             margin: 12px 0 !important;
-        }
-        
-        /* 侧边栏 */
-        section[data-testid="stSidebar"] {
-            min-width: 200px;
-            max-width: 85vw;
-        }
-        
-        /* 展开器 */
-        .streamlit-expanderHeader {
-            font-size: 14px !important;
-            padding: 8px 0 !important;
-        }
-        
-        /* 高亮得分 */
-        .high-score {
-            font-weight: bold;
-            color: #e53935;
         }
     }
     
@@ -170,17 +170,26 @@ st.markdown("""
     .upcoming-game {
         border-left: 4px solid #2196F3 !important;
     }
-    
-    /* 简化表格的列宽调整 */
-    .simple-table-container .dataframe th:nth-child(1) { min-width: 100px; } /* 球员 */
-    .simple-table-container .dataframe th:nth-child(2) { min-width: 60px; } /* 时间 */
-    .simple-table-container .dataframe th:nth-child(3) { min-width: 60px; } /* 得分 */
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏀 NBA实时赛程(小宝子)")
+st.title("🏀 NBA实时赛程(小包子)")
 
-# 初始化 session state
+# ====== 新增自动刷新功能 ======
+# 初始化自动刷新相关的session state
+if 'auto_refresh' not in st.session_state:
+    st.session_state.auto_refresh = True  # 默认开启自动刷新
+    
+if 'refresh_interval' not in st.session_state:
+    st.session_state.refresh_interval = 30  # 默认30秒刷新一次
+    
+if 'last_refresh_time' not in st.session_state:
+    st.session_state.last_refresh_time = datetime.now()
+    
+if 'refresh_countdown' not in st.session_state:
+    st.session_state.refresh_countdown = st.session_state.refresh_interval
+
+# 初始化其他session state
 if 'refresh_count' not in st.session_state:
     st.session_state.refresh_count = 0
     
@@ -559,6 +568,8 @@ with col1:
 with col2:
     if st.button("🔄 刷新", use_container_width=True):
         st.cache_data.clear()
+        st.session_state.last_refresh_time = datetime.now()
+        st.session_state.refresh_countdown = st.session_state.refresh_interval
         st.rerun()
 
 st.subheader(f"📅 {selected_date.strftime('%Y年%m月%d日')}")
@@ -726,6 +737,86 @@ for i, event in enumerate(events):
     if i < len(events) - 1:
         st.divider()
 
+# ====== 新增自动刷新控制面板 ======
+st.markdown("---")
+
+# 自动刷新控制面板
+st.markdown('<div class="refresh-panel">', unsafe_allow_html=True)
+st.markdown("### 🔄 自动刷新控制")
+
+# 控制开关和设置
+col1, col2, col3 = st.columns([1, 1, 1])
+
+with col1:
+    auto_refresh = st.toggle(
+        "自动刷新", 
+        value=st.session_state.auto_refresh,
+        help="开启后页面会自动定期刷新"
+    )
+    # 更新session state
+    if auto_refresh != st.session_state.auto_refresh:
+        st.session_state.auto_refresh = auto_refresh
+        st.session_state.last_refresh_time = datetime.now()
+        st.session_state.refresh_countdown = st.session_state.refresh_interval
+        st.rerun()
+
+with col2:
+    interval_options = [10, 30, 60, 120]
+    refresh_interval = st.selectbox(
+        "刷新间隔(秒)",
+        options=interval_options,
+        index=interval_options.index(st.session_state.refresh_interval) if st.session_state.refresh_interval in interval_options else 1,
+        help="设置自动刷新的时间间隔"
+    )
+    # 更新session state
+    if refresh_interval != st.session_state.refresh_interval:
+        st.session_state.refresh_interval = refresh_interval
+        st.session_state.refresh_countdown = refresh_interval
+        st.rerun()
+
+with col3:
+    # 计算倒计时
+    current_time = datetime.now()
+    time_diff = (current_time - st.session_state.last_refresh_time).total_seconds()
+    st.session_state.refresh_countdown = max(0, st.session_state.refresh_interval - int(time_diff))
+    
+    # 显示状态和倒计时
+    if st.session_state.auto_refresh:
+        status_text = "状态: <span class='auto-refresh-on'>开启</span>"
+        countdown_text = f"倒计时: <span class='countdown'>{st.session_state.refresh_countdown}秒</span>"
+    else:
+        status_text = "状态: <span class='auto-refresh-off'>关闭</span>"
+        countdown_text = "倒计时: --"
+    
+    st.markdown(status_text, unsafe_allow_html=True)
+    st.markdown(countdown_text, unsafe_allow_html=True)
+
+# 手动刷新按钮
+if st.button("🔄 立即手动刷新", use_container_width=True, type="primary"):
+    st.cache_data.clear()
+    st.session_state.last_refresh_time = datetime.now()
+    st.session_state.refresh_countdown = st.session_state.refresh_interval
+    st.rerun()
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ====== 自动刷新逻辑 ======
+# 如果自动刷新开启且倒计时结束，则自动刷新页面
+if st.session_state.auto_refresh and st.session_state.refresh_countdown <= 0:
+    # 更新最后刷新时间
+    st.session_state.last_refresh_time = datetime.now()
+    st.session_state.refresh_countdown = st.session_state.refresh_interval
+    
+    # 显示刷新提示
+    refresh_msg = st.empty()
+    refresh_msg.info("🔄 正在自动刷新数据...")
+    
+    # 短暂延迟后刷新
+    time.sleep(1)
+    refresh_msg.empty()
+    st.cache_data.clear()
+    st.rerun()
+
 # 页脚信息
 st.divider()
 footer_cols = st.columns([3, 1])
@@ -734,4 +825,3 @@ with footer_cols[0]:
 with footer_cols[1]:
     if st.button("⬆️ 返回顶部", use_container_width=True):
         st.rerun()
-

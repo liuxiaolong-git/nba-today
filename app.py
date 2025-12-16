@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 移动端优化的CSS - 简化CSS避免冲突
+# 移动端优化的CSS
 st.markdown("""
 <style>
     /* 通用样式 */
@@ -40,12 +40,38 @@ st.markdown("""
         max-width: 120px;
     }
     
+    .game-time {
+        font-size: 14px;
+        color: #666;
+        margin: 5px 0;
+    }
+    
+    /* 折叠按钮样式 */
+    .toggle-button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-size: 14px;
+        cursor: pointer;
+        margin: 10px 0;
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+    }
+    
+    .toggle-button:hover {
+        opacity: 0.9;
+    }
+    
     .quarter-container {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
-        margin-top: 10px;
-        margin-bottom: 10px;
+        margin: 10px 0;
     }
     
     .quarter-box {
@@ -55,18 +81,6 @@ st.markdown("""
         font-size: 14px;
         text-align: center;
         min-width: 80px;
-    }
-    
-    .quarter-title {
-        font-weight: bold;
-        color: #333;
-        margin-bottom: 2px;
-    }
-    
-    .quarter-score {
-        font-size: 16px;
-        font-weight: bold;
-        color: #2196F3;
     }
     
     /* 移动端优化 */
@@ -81,10 +95,18 @@ st.markdown("""
             max-width: 90px;
         }
         
+        .game-time {
+            font-size: 12px;
+        }
+        
+        .toggle-button {
+            padding: 6px 12px;
+            font-size: 13px;
+            margin: 8px 0;
+        }
+        
         .quarter-container {
             gap: 6px;
-            margin-top: 8px;
-            margin-bottom: 8px;
         }
         
         .quarter-box {
@@ -93,12 +115,13 @@ st.markdown("""
             font-size: 12px;
         }
         
-        .quarter-title {
-            font-size: 12px;
+        h1 {
+            font-size: 20px !important;
+            text-align: center;
         }
         
-        .quarter-score {
-            font-size: 14px;
+        h2, h3 {
+            font-size: 16px !important;
         }
     }
 </style>
@@ -107,15 +130,6 @@ st.markdown("""
 st.title("🏀 NBA实时赛程(小包子)")
 
 # ====== 初始化状态 ======
-if 'auto_refresh' not in st.session_state:
-    st.session_state.auto_refresh = True
-    
-if 'refresh_interval' not in st.session_state:
-    st.session_state.refresh_interval = 30
-    
-if 'last_refresh_time' not in st.session_state:
-    st.session_state.last_refresh_time = time.time()
-
 if 'untranslated_players' not in st.session_state:
     st.session_state.untranslated_players = set()
 
@@ -125,45 +139,15 @@ if 'expanded_games' not in st.session_state:
 if 'game_period_info' not in st.session_state:
     st.session_state.game_period_info = {}
 
-if 'countdown_times' not in st.session_state:
-    st.session_state.countdown_times = {}
+# 添加折叠状态存储
+if 'game_collapsed' not in st.session_state:
+    st.session_state.game_collapsed = {}
+
+if 'last_refresh' not in st.session_state:
+    st.session_state.last_refresh = time.time()
 
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
-
-# ====== JavaScript实现动态倒计时 ======
-st.markdown("""
-<script>
-// 更新页面刷新倒计时
-function updateRefreshCountdown() {
-    const refreshCountdownEl = document.getElementById('refresh-countdown');
-    if (refreshCountdownEl) {
-        let seconds = parseInt(refreshCountdownEl.getAttribute('data-seconds'));
-        if (seconds > 0) {
-            seconds--;
-            refreshCountdownEl.setAttribute('data-seconds', seconds);
-            refreshCountdownEl.textContent = `${seconds}秒`;
-            if (seconds <= 5) {
-                refreshCountdownEl.classList.add('pulse-animation');
-            } else {
-                refreshCountdownEl.classList.remove('pulse-animation');
-            }
-        } else if (seconds <= 0) {
-            // 当倒计时为0时，重新加载页面
-            window.location.reload();
-        }
-    }
-}
-
-// 每秒更新一次
-setInterval(updateRefreshCountdown, 1000);
-
-// 初始化
-document.addEventListener('DOMContentLoaded', function() {
-    updateRefreshCountdown();
-});
-</script>
-""", unsafe_allow_html=True)
 
 # ====== 翻译数据加载 ======
 @st.cache_resource(ttl=600)
@@ -201,7 +185,7 @@ def translate_player_name(name):
     return name
 
 # ====== API 数据获取函数 ======
-@st.cache_data(ttl=10, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)  # 缓存30秒
 def fetch_nba_schedule(date_str):
     try:
         eastern = pytz.timezone('America/New_York')
@@ -209,7 +193,7 @@ def fetch_nba_schedule(date_str):
         eastern_dt = beijing_dt.astimezone(eastern)
         url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
         params = {'dates': eastern_dt.strftime('%Y%m%d'), 'lang': 'zh', 'region': 'cn'}
-        resp = requests.get(url, params=params, timeout=3)
+        resp = requests.get(url, params=params, timeout=5)
         resp.raise_for_status()
         return resp.json()
     except Exception:
@@ -453,6 +437,8 @@ def display_full_table(players_data):
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ====== 主界面 ======
+
+# 顶部手动刷新按钮和日期选择器
 col1, col2 = st.columns([3, 1])
 with col1:
     selected_date = st.date_input(
@@ -464,27 +450,16 @@ with col1:
     )
 
 with col2:
-    manual_refresh = st.button("🔄 刷新", use_container_width=True, key='manual_refresh_top')
+    manual_refresh = st.button("🔄 刷新数据", use_container_width=True, key='manual_refresh_top', type="primary")
     if manual_refresh:
-        st.session_state.last_refresh_time = time.time()
+        st.session_state.last_refresh = time.time()
         st.cache_data.clear()
         st.rerun()
-
-# 计算倒计时
-current_time = time.time()
-time_since_last_refresh = current_time - st.session_state.last_refresh_time
-countdown_seconds = max(0, st.session_state.refresh_interval - int(time_since_last_refresh))
-
-# 检查是否需要自动刷新
-if st.session_state.auto_refresh and countdown_seconds <= 0:
-    st.session_state.last_refresh_time = current_time
-    st.cache_data.clear()
-    st.rerun()
 
 st.subheader(f"📅 {selected_date.strftime('%Y年%m月%d日')}")
 
 # 加载主赛程数据
-with st.spinner("快速加载赛程..."):
+with st.spinner("加载赛程数据..."):
     schedule = fetch_nba_schedule(selected_date.strftime('%Y-%m-%d'))
 
 if not schedule or 'events' not in schedule:
@@ -505,7 +480,7 @@ for event in events:
 
 player_stats_map = {}
 if live_or_post_event_ids:
-    with st.spinner("同步球员数据..."):
+    with st.spinner("加载球员数据..."):
         player_stats_map = fetch_all_player_stats_parallel(live_or_post_event_ids)
 
 # 渲染比赛列表
@@ -547,7 +522,8 @@ for i, event in enumerate(events):
         bj_time = "时间待定"
 
     # 比赛卡片
-    st.markdown(f'<div class="game-card {game_class}">', unsafe_allow_html=True)
+    game_id = event['id']
+    st.markdown(f'<div class="game-card {game_class}" id="game-{game_id}">', unsafe_allow_html=True)
     
     # 比赛基本信息
     cols = st.columns([2, 1, 2])
@@ -556,7 +532,7 @@ for i, event in enumerate(events):
         st.markdown(f'<span style="font-size: 24px; font-weight: bold;">{away_score}</span>', unsafe_allow_html=True)
     with cols[1]:
         st.markdown("**VS**")
-        st.markdown(f'<div style="font-size: 14px; color: #666;">{bj_time}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="game-time">{bj_time}</div>', unsafe_allow_html=True)
     with cols[2]:
         st.markdown(f'<div class="team-name">{home_name}</div>', unsafe_allow_html=True)
         st.markdown(f'<span style="font-size: 24px; font-weight: bold;">{home_score}</span>', unsafe_allow_html=True)
@@ -569,191 +545,138 @@ for i, event in enumerate(events):
     else:
         st.markdown(f"**{status_badge} {desc}**")
     
-    # 如果是直播中或已结束的比赛，显示节次信息
-    if state in ['in', 'post'] and period_info:
-        if period_info['state'] == 'in':
-            # 直播中：显示节次和倒计时
-            clock_display = ""
-            if period_info['clock'] and period_info['clock'] != '0:00':
-                clock_display = f"⏱️ {period_info['clock']}"
+    # 初始化折叠状态
+    if game_id not in st.session_state.game_collapsed:
+        st.session_state.game_collapsed[game_id] = True
+    
+    # 折叠/展开按钮
+    toggle_label = "📖 展开详情" if st.session_state.game_collapsed[game_id] else "📕 折叠详情"
+    if st.button(toggle_label, key=f"toggle_{game_id}", use_container_width=True):
+        st.session_state.game_collapsed[game_id] = not st.session_state.game_collapsed[game_id]
+        st.rerun()
+    
+    # 如果展开，显示详细信息
+    if not st.session_state.game_collapsed[game_id]:
+        # 显示节次信息
+        if state in ['in', 'post'] and period_info:
+            if period_info['state'] == 'in':
+                # 直播中：显示节次和倒计时
+                clock_display = ""
+                if period_info['clock'] and period_info['clock'] != '0:00':
+                    clock_display = f"⏱️ {period_info['clock']}"
+                    
+                period_display = f"**🎯 {period_info['period_text']} {clock_display}**"
+                st.markdown(period_display)
                 
-            period_display = f"**🎯 {period_info['period_text']} {clock_display}**"
-            st.markdown(period_display)
-            
-            # 显示每节得分 - 使用简单的方法避免HTML标签问题
-            if period_info['quarter_scores']:
-                st.markdown("**每节比分:**")
-                
-                # 使用st.columns但数量限制在4个以内
-                quarter_scores = period_info['quarter_scores']
-                num_quarters = len(quarter_scores)
-                num_cols = min(4, num_quarters)
-                
-                quarter_cols = st.columns(num_cols)
-                
-                for idx, q in enumerate(quarter_scores[:4]):  # 最多显示4节
-                    col_idx = idx % num_cols
-                    with quarter_cols[col_idx]:
-                        # 直接使用markdown，不要用HTML
-                        st.markdown(f"**{q['quarter']}**")
-                        st.markdown(f"**{q['away_score']}-{q['home_score']}**")
-                
-                st.markdown(f"**当前总分: {away_name} {away_score}-{home_score} {home_name}**")
-        
-        elif period_info['state'] == 'post':
-            # 已结束：显示最终节次信息
-            st.markdown(f"**🏁 {period_info['period_text']}**")
-            
-            # 显示所有节次得分
-            if period_info['quarter_scores']:
-                st.markdown("**全场比分:**")
-                
-                # 使用st.columns显示节次比分
-                quarter_scores = period_info['quarter_scores']
-                num_quarters = len(quarter_scores)
-                
-                # 分两行显示，每行最多4个
-                if num_quarters <= 4:
-                    quarter_cols = st.columns(num_quarters)
-                    for idx, q in enumerate(quarter_scores):
-                        with quarter_cols[idx]:
-                            st.markdown(f"**{q['quarter']}**")
-                            st.markdown(f"**{q['away_score']}-{q['home_score']}**")
-                else:
-                    # 第一行显示前4个
-                    quarter_cols1 = st.columns(4)
-                    for idx in range(4):
-                        with quarter_cols1[idx]:
-                            if idx < len(quarter_scores):
-                                q = quarter_scores[idx]
+                # 显示每节得分
+                if period_info['quarter_scores']:
+                    st.markdown("**每节比分:**")
+                    
+                    # 使用st.columns显示
+                    quarter_scores = period_info['quarter_scores']
+                    num_quarters = len(quarter_scores)
+                    num_cols = min(4, num_quarters)
+                    
+                    if num_cols > 0:
+                        quarter_cols = st.columns(num_cols)
+                        
+                        for idx, q in enumerate(quarter_scores[:4]):  # 最多显示4节
+                            col_idx = idx % num_cols
+                            with quarter_cols[col_idx]:
                                 st.markdown(f"**{q['quarter']}**")
                                 st.markdown(f"**{q['away_score']}-{q['home_score']}**")
                     
-                    # 第二行显示剩余的部分
-                    remaining = quarter_scores[4:]
-                    if remaining:
-                        quarter_cols2 = st.columns(len(remaining))
-                        for idx, q in enumerate(remaining):
-                            with quarter_cols2[idx]:
-                                st.markdown(f"**{q['quarter']}**")
-                                st.markdown(f"**{q['away_score']}-{q['home_score']}**")
+                    st.markdown(f"**当前总分: {away_name} {away_score}-{home_score} {home_name}**")
+            
+            elif period_info['state'] == 'post':
+                # 已结束：显示最终节次信息
+                st.markdown(f"**🏁 {period_info['period_text']}**")
                 
-                st.markdown(f"**总比分: {away_name} {away_score}-{home_score} {home_name}**")
-    
-    # 球员数据
-    if state in ['in', 'post']:
-        game_data = player_stats_map.get(event['id'])
-        if game_data:
-            away_p, home_p = parse_player_stats(game_data)
-            if away_p or home_p:
-                game_key = f"game_{event['id']}"
-                if game_key not in st.session_state.expanded_games:
-                    st.session_state.expanded_games[game_key] = {'away_expanded': False, 'home_expanded': False}
-                
-                st.markdown("---")
-                st.markdown("**球员数据**")
-                tab1, tab2 = st.tabs([f"👤 {away_name}", f"👤 {home_name}"])
-                
-                with tab1:
-                    if away_p:
-                        st.markdown(f"**{away_name}**")
-                        display_simple_table(away_p, away_name)
-                        col_btn1, _ = st.columns([1, 1])
-                        with col_btn1:
-                            if st.button("📊 详细数据", key=f"expand_away_{event['id']}", 
-                                      use_container_width=True, 
-                                      type="secondary" if not st.session_state.expanded_games[game_key]['away_expanded'] else "primary"):
-                                st.session_state.expanded_games[game_key]['away_expanded'] = not st.session_state.expanded_games[game_key]['away_expanded']
-                        if st.session_state.expanded_games[game_key]['away_expanded']:
-                            st.markdown("**详细数据**")
-                            display_full_table(away_p)
-                    else:
-                        st.info("暂无球员数据")
-                
-                with tab2:
-                    if home_p:
-                        st.markdown(f"**{home_name}**")
-                        display_simple_table(home_p, home_name)
-                        col_btn1, _ = st.columns([1, 1])
-                        with col_btn1:
-                            if st.button("📊 详细数据", key=f"expand_home_{event['id']}", 
-                                      use_container_width=True, 
-                                      type="secondary" if not st.session_state.expanded_games[game_key]['home_expanded'] else "primary"):
-                                st.session_state.expanded_games[game_key]['home_expanded'] = not st.session_state.expanded_games[game_key]['home_expanded']
-                        if st.session_state.expanded_games[game_key]['home_expanded']:
-                            st.markdown("**详细数据**")
-                            display_full_table(home_p)
-                    else:
-                        st.info("暂无球员数据")
+                # 显示所有节次得分
+                if period_info['quarter_scores']:
+                    st.markdown("**全场比分:**")
+                    
+                    quarter_scores = period_info['quarter_scores']
+                    num_quarters = len(quarter_scores)
+                    
+                    # 分多行显示
+                    for row_start in range(0, num_quarters, 4):
+                        row_end = min(row_start + 4, num_quarters)
+                        if row_start < row_end:
+                            row_cols = st.columns(min(4, row_end - row_start))
+                            
+                            for idx in range(row_start, row_end):
+                                q = quarter_scores[idx]
+                                col_idx = idx - row_start
+                                with row_cols[col_idx]:
+                                    st.markdown(f"**{q['quarter']}**")
+                                    st.markdown(f"**{q['away_score']}-{q['home_score']}**")
+                    
+                    st.markdown(f"**总比分: {away_name} {away_score}-{home_score} {home_name}**")
+        
+        # 球员数据
+        if state in ['in', 'post']:
+            game_data = player_stats_map.get(event['id'])
+            if game_data:
+                away_p, home_p = parse_player_stats(game_data)
+                if away_p or home_p:
+                    game_key = f"game_{event['id']}"
+                    if game_key not in st.session_state.expanded_games:
+                        st.session_state.expanded_games[game_key] = {'away_expanded': False, 'home_expanded': False}
+                    
+                    st.markdown("---")
+                    st.markdown("**球员数据**")
+                    tab1, tab2 = st.tabs([f"👤 {away_name}", f"👤 {home_name}"])
+                    
+                    with tab1:
+                        if away_p:
+                            st.markdown(f"**{away_name}**")
+                            display_simple_table(away_p, away_name)
+                            col_btn1, _ = st.columns([1, 1])
+                            with col_btn1:
+                                if st.button("📊 详细数据", key=f"expand_away_{event['id']}", 
+                                          use_container_width=True, 
+                                          type="secondary" if not st.session_state.expanded_games[game_key]['away_expanded'] else "primary"):
+                                    st.session_state.expanded_games[game_key]['away_expanded'] = not st.session_state.expanded_games[game_key]['away_expanded']
+                            if st.session_state.expanded_games[game_key]['away_expanded']:
+                                st.markdown("**详细数据**")
+                                display_full_table(away_p)
+                        else:
+                            st.info("暂无球员数据")
+                    
+                    with tab2:
+                        if home_p:
+                            st.markdown(f"**{home_name}**")
+                            display_simple_table(home_p, home_name)
+                            col_btn1, _ = st.columns([1, 1])
+                            with col_btn1:
+                                if st.button("📊 详细数据", key=f"expand_home_{event['id']}", 
+                                          use_container_width=True, 
+                                          type="secondary" if not st.session_state.expanded_games[game_key]['home_expanded'] else "primary"):
+                                    st.session_state.expanded_games[game_key]['home_expanded'] = not st.session_state.expanded_games[game_key]['home_expanded']
+                            if st.session_state.expanded_games[game_key]['home_expanded']:
+                                st.markdown("**详细数据**")
+                                display_full_table(home_p)
+                        else:
+                            st.info("暂无球员数据")
     
     st.markdown('</div>', unsafe_allow_html=True)
     
     if i < len(events) - 1:
         st.divider()
 
-# ====== 自动刷新控制面板 ======
+# 底部手动刷新按钮
 st.markdown("---")
-st.markdown('<div style="background-color: #f8f9fa; border-radius: 10px; padding: 10px; margin-top: 10px; border: 1px solid #dee2e6;">', unsafe_allow_html=True)
-st.markdown("### 🔄 自动刷新控制")
-
-col1, col2, col3 = st.columns([1, 1, 1])
-with col1:
-    auto_refresh = st.toggle(
-        "自动刷新", 
-        value=st.session_state.auto_refresh,
-        help="开启后页面会自动定期刷新",
-        key='auto_refresh_toggle'
-    )
-with col2:
-    interval_options = [10, 30, 60, 120]
-    refresh_interval = st.selectbox(
-        "刷新间隔(秒)",
-        options=interval_options,
-        index=interval_options.index(st.session_state.refresh_interval) if st.session_state.refresh_interval in interval_options else 1,
-        help="设置自动刷新的时间间隔",
-        key='refresh_interval_select'
-    )
-with col3:
-    # 更新session state
-    if st.session_state.auto_refresh != auto_refresh:
-        st.session_state.auto_refresh = auto_refresh
-    if st.session_state.refresh_interval != refresh_interval:
-        st.session_state.refresh_interval = refresh_interval
-        st.session_state.last_refresh_time = current_time
-    
-    # 显示状态和动态倒计时
-    if st.session_state.auto_refresh:
-        status_text = f"状态: <span style='color: #4CAF50; font-weight: bold;'>开启</span>"
-        # 使用JavaScript实现动态倒计时
-        countdown_text = f"倒计时: <span style='font-weight: bold; color: #2196F3;' id='refresh-countdown' data-seconds='{countdown_seconds}'>{countdown_seconds}秒</span>"
-    else:
-        status_text = "状态: <span style='color: #9E9E9E;'>关闭</span>"
-        countdown_text = "倒计时: --"
-    
-    st.markdown(status_text, unsafe_allow_html=True)
-    st.markdown(countdown_text, unsafe_allow_html=True)
-
-# 手动刷新按钮（底部）
-if st.button("🔄 立即手动刷新", use_container_width=True, type="primary", key='manual_refresh_bottom'):
-    st.session_state.last_refresh_time = time.time()
+if st.button("🔄 刷新所有数据", use_container_width=True, type="primary", key='manual_refresh_bottom'):
+    st.session_state.last_refresh = time.time()
     st.cache_data.clear()
     st.rerun()
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# ====== 自动刷新机制 ======
-if st.session_state.auto_refresh:
-    refresh_seconds = st.session_state.refresh_interval + 1
-    # 使用Streamlit的自动刷新功能
-    st.markdown(f"""
-    <meta http-equiv="refresh" content="{refresh_seconds}">
-    """, unsafe_allow_html=True)
 
 # 页脚信息
 st.divider()
 footer_cols = st.columns([3, 1])
 with footer_cols[0]:
-    st.caption(f"最后更新: {datetime.now(beijing_tz).strftime('%H:%M:%S')} | 刷新间隔: {st.session_state.refresh_interval}秒")
+    st.caption(f"最后更新: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
 with footer_cols[1]:
     if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
         st.rerun()

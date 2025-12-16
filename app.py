@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 移动端优化的CSS
+# 移动端优化的CSS - 修复CSS选择器
 st.markdown("""
 <style>
     @media (max-width: 768px) {
@@ -49,9 +49,20 @@ st.markdown("""
             color: white; padding: 6px 12px; border-radius: 20px;
             font-size: 12px; display: inline-block; margin: 4px 0;
         }
-        .score-quarter {
-            background: #f0f2f6; padding: 4px 8px; border-radius: 10px;
-            font-size: 11px; margin: 2px; display: inline-block;
+        /* 移除之前的.score-quarter样式，使用新的选择器 */
+        .score-display {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 8px;
+        }
+        .quarter-score {
+            background: #f0f2f6;
+            padding: 4px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            margin: 2px;
+            display: inline-block;
         }
     }
     .live-game { border-left: 4px solid #4CAF50 !important; }
@@ -73,7 +84,13 @@ st.markdown("""
         border-radius: 12px;
         font-size: 12px;
         margin-right: 8px;
+        background: #e8f5e9;
+        color: #2e7d32;
     }
+    /* 添加比赛状态颜色 */
+    .status-in { color: #4CAF50; }
+    .status-post { color: #9E9E9E; }
+    .status-pre { color: #2196F3; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -301,10 +318,19 @@ def get_game_period_info(event):
             for i in range(min(len(away_linescores), len(home_linescores))):
                 away_q_score = away_linescores[i].get('value', 0)
                 home_q_score = home_linescores[i].get('value', 0)
+                
+                # 处理加时赛显示
+                quarter_num = i + 1
+                if quarter_num <= 4:
+                    quarter_label = f"第{quarter_num}节"
+                else:
+                    quarter_label = f"加时{quarter_num-4}"
+                
                 quarter_scores.append({
-                    'quarter': i + 1,
+                    'quarter': quarter_label,
                     'away_score': away_q_score,
-                    'home_score': home_q_score
+                    'home_score': home_q_score,
+                    'quarter_num': quarter_num
                 })
         
         # 生成状态文本
@@ -559,52 +585,66 @@ for i, event in enumerate(events):
         st.markdown(f'<div class="team-name">{home_name}</div>', unsafe_allow_html=True)
         st.markdown(f'<span style="font-size: 24px; font-weight: bold;">{home_score}</span>', unsafe_allow_html=True)
     
-    # 显示状态信息
-    status_display = f'<span class="status-badge">{status_badge}</span> {desc}'
+    # 显示状态信息 - 直接使用markdown而不是HTML注入
+    st.markdown(f"**{status_badge} {desc}**")
     
     # 如果是直播中或已结束的比赛，显示节次信息
     if state in ['in', 'post'] and period_info:
         if period_info['state'] == 'in':
             # 直播中：显示节次和倒计时
-            clock_display = ''
+            clock_display = ""
             if period_info['clock'] and period_info['clock'] != '0:00':
-                clock_display = f'<span class="countdown" id="game-clock-{event["id"]}"></span>'
-                # 添加隐藏的秒数存储
-                st.markdown(f'<div id="game-clock-seconds-{event["id"]}" data-seconds="{period_info["clock_seconds"]}" style="display:none;"></div>', unsafe_allow_html=True)
+                clock_display = f"⏱️ {period_info['clock']}"
+                
+            st.markdown(f"**🎯 {period_info['period_text']} {clock_display}**")
             
-            status_display += f'<br><div class="period-info">🎯 {period_info["period_text"]} {clock_display}</div>'
-            
-            # 显示每节得分
+            # 显示每节得分 - 使用markdown而不是HTML
             if period_info['quarter_scores']:
-                scores_html = '<div style="margin-top: 8px;"><strong>每节比分:</strong><br>'
-                for q in period_info['quarter_scores']:
-                    scores_html += f'''
-                    <span class="score-quarter">
-                        第{q["quarter"]}节: {away_name} {q["away_score"]}-{q["home_score"]} {home_name}
-                    </span>
-                    '''
-                scores_html += f'<br>当前总分: {away_name} {away_score}-{home_score} {home_name}'
-                scores_html += '</div>'
-                status_display += scores_html
+                st.markdown("**每节比分:**")
+                
+                # 创建列来显示节次比分
+                quarter_cols = st.columns(min(4, len(period_info['quarter_scores'])))
+                
+                for idx, q in enumerate(period_info['quarter_scores']):
+                    if idx < 4:  # 最多显示4列
+                        col_idx = idx % len(quarter_cols)
+                        with quarter_cols[col_idx]:
+                            st.markdown(
+                                f"<div style='background: #f0f2f6; padding: 4px 8px; border-radius: 10px; "
+                                f"font-size: 11px; margin: 2px;'>"
+                                f"**{q['quarter']}**<br>"
+                                f"{q['away_score']}-{q['home_score']}"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
+                
+                st.markdown(f"**当前总分: {away_name} {away_score}-{home_score} {home_name}**")
         
         elif period_info['state'] == 'post':
             # 已结束：显示最终节次信息
-            status_display += f'<br><div class="period-info">🏁 {period_info["period_text"]}</div>'
+            st.markdown(f"**🏁 {period_info['period_text']}**")
             
             # 显示所有节次得分
             if period_info['quarter_scores']:
-                scores_html = '<div style="margin-top: 8px;"><strong>全场比分:</strong><br>'
-                for q in period_info['quarter_scores']:
-                    scores_html += f'''
-                    <span class="score-quarter">
-                        第{q["quarter"]}节: {away_name} {q["away_score"]}-{q["home_score"]} {home_name}
-                    </span>
-                    '''
-                scores_html += f'<br><strong>总比分: {away_name} {away_score}-{home_score} {home_name}</strong>'
-                scores_html += '</div>'
-                status_display += scores_html
-    
-    st.markdown(status_display, unsafe_allow_html=True)
+                st.markdown("**全场比分:**")
+                
+                # 创建列来显示节次比分
+                quarter_cols = st.columns(min(4, len(period_info['quarter_scores'])))
+                
+                for idx, q in enumerate(period_info['quarter_scores']):
+                    if idx < 8:  # 最多显示8节（4节+4个加时）
+                        col_idx = idx % len(quarter_cols)
+                        with quarter_cols[col_idx]:
+                            st.markdown(
+                                f"<div style='background: #f0f2f6; padding: 4px 8px; border-radius: 10px; "
+                                f"font-size: 11px; margin: 2px;'>"
+                                f"**{q['quarter']}**<br>"
+                                f"{q['away_score']}-{q['home_score']}"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
+                
+                st.markdown(f"**总比分: {away_name} {away_score}-{home_score} {home_name}**")
     
     # 球员数据
     if state in ['in', 'post']:

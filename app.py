@@ -90,7 +90,7 @@ if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = True
     
 if 'refresh_interval' not in st.session_state:
-    st.session_state.refresh_interval = 30
+    st.session_state.refresh_interval = 300
     
 if 'last_refresh_time' not in st.session_state:
     st.session_state.last_refresh_time = time.time()
@@ -135,7 +135,7 @@ function updateRefreshCountdown() {
 }
 
 // 每秒更新一次
-setInterval(updateRefreshCountdown, 1000);
+setInterval(updateRefreshCountdown, 100000);
 
 // 初始化
 document.addEventListener('DOMContentLoaded', function() {
@@ -145,7 +145,7 @@ document.addEventListener('DOMContentLoaded', function() {
 """, unsafe_allow_html=True)
 
 # ====== 翻译数据加载 ======
-@st.cache_resource(ttl=600)
+@st.cache_resource(ttl=600000)
 def get_translations():
     try:
         from translations import TEAM_TRANSLATION, PLAYER_TRANSLATION
@@ -720,3 +720,4 @@ with footer_cols[0]:
 with footer_cols[1]:
     if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
         st.rerun()
+

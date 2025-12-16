@@ -14,53 +14,56 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 移动端优化的CSS
+# 移动端优化的CSS - 修复移动端单节比分显示问题
 st.markdown("""
 <style>
-    @media (max-width: 768px) {
-        .main .block-container { padding: 0.5rem !important; }
-        .game-card {
-            background: white; border-radius: 10px; padding: 12px; margin: 8px 0;
-            border: 1px solid #e0e0e0; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        }
-        .simple-table-container, .full-table-container {
-            overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 8px 0;
-        }
-        .full-table-container { border-radius: 8px; border: 1px solid #e0e0e0; }
-        .dataframe { font-size: 12px !important; }
-        .dataframe th, .dataframe td { padding: 6px 4px !important; white-space: nowrap; }
-        .stButton > button { min-height: 40px; font-size: 14px; width: 100%; }
-        .refresh-panel {
-            background-color: #f8f9fa; border-radius: 10px; padding: 10px;
-            margin-top: 10px; border: 1px solid #dee2e6;
-        }
-        h1 { font-size: 20px !important; margin-bottom: 12px !important; }
-        h2, h3 { font-size: 16px !important; }
-        .team-name {
-            font-size: 14px; font-weight: bold; white-space: nowrap;
-            overflow: hidden; text-overflow: ellipsis; max-width: 120px;
-        }
-        .game-time { font-size: 12px; color: #666; }
-        .countdown { font-weight: bold; color: #2196F3; font-size: 13px; }
-        .auto-refresh-on { color: #4CAF50; font-weight: bold; }
-        .auto-refresh-off { color: #9E9E9E; }
-        .period-info {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; padding: 6px 12px; border-radius: 20px;
-            font-size: 12px; display: inline-block; margin: 4px 0;
-        }
-        .quarter-score {
-            background: #f0f2f6;
-            padding: 4px 8px;
-            border-radius: 10px;
-            font-size: 11px;
-            margin: 2px;
-            display: inline-block;
-        }
+    /* 通用样式 */
+    .game-card {
+        background: white; border-radius: 10px; padding: 12px; margin: 8px 0;
+        border: 1px solid #e0e0e0; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
+    .simple-table-container, .full-table-container {
+        overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 8px 0;
+    }
+    .full-table-container { border-radius: 8px; border: 1px solid #e0e0e0; }
+    .dataframe { font-size: 12px !important; }
+    .dataframe th, .dataframe td { padding: 6px 4px !important; white-space: nowrap; }
+    .stButton > button { min-height: 40px; font-size: 14px; width: 100%; }
+    .refresh-panel {
+        background-color: #f8f9fa; border-radius: 10px; padding: 10px;
+        margin-top: 10px; border: 1px solid #dee2e6;
+    }
+    h1 { font-size: 24px !important; margin-bottom: 12px !important; }
+    h2, h3 { font-size: 18px !important; }
+    .team-name {
+        font-size: 16px; font-weight: bold; white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis; max-width: 120px;
+    }
+    .game-time { font-size: 14px; color: #666; }
+    .countdown { font-weight: bold; color: #2196F3; font-size: 14px; }
+    .auto-refresh-on { color: #4CAF50; font-weight: bold; }
+    .auto-refresh-off { color: #9E9E9E; }
+    .period-info {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white; padding: 8px 12px; border-radius: 20px;
+        font-size: 14px; display: inline-block; margin: 4px 0;
+    }
+    .quarter-score {
+        background: #f0f2f6;
+        padding: 6px 10px;
+        border-radius: 10px;
+        font-size: 13px;
+        margin: 4px;
+        display: inline-block;
+        min-width: 70px;
+        text-align: center;
+    }
+    
+    /* 游戏状态样式 */
     .live-game { border-left: 4px solid #4CAF50 !important; }
     .finished-game { border-left: 4px solid #9E9E9E !important; }
     .upcoming-game { border-left: 4px solid #2196F3 !important; }
+    
     /* 动态倒计时动画 */
     @keyframes pulse {
         0% { transform: scale(1); }
@@ -79,6 +82,75 @@ st.markdown("""
         margin-right: 8px;
         background: #e8f5e9;
         color: #2e7d32;
+    }
+    
+    /* 移动端特定样式 */
+    @media (max-width: 768px) {
+        .main .block-container { 
+            padding: 0.5rem !important; 
+            max-width: 100% !important;
+        }
+        .team-name {
+            font-size: 14px;
+            max-width: 90px;
+        }
+        .game-time {
+            font-size: 12px;
+        }
+        h1 { 
+            font-size: 20px !important; 
+            text-align: center;
+        }
+        h2, h3 { 
+            font-size: 16px !important; 
+        }
+        
+        /* 修复移动端单节比分显示 */
+        .quarter-score-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 8px;
+            justify-content: flex-start;
+        }
+        .quarter-score {
+            font-size: 12px;
+            padding: 4px 6px;
+            min-width: 60px;
+            flex: 0 0 auto;
+        }
+        
+        /* 确保比分标题显示 */
+        .score-title {
+            font-size: 14px !important;
+            font-weight: bold;
+            margin-top: 8px;
+            margin-bottom: 4px;
+            display: block !important;
+        }
+        
+        /* 修复列布局在移动端 */
+        .stColumn {
+            padding: 0 2px !important;
+        }
+        
+        /* 确保所有内容都显示 */
+        div[data-testid="stVerticalBlock"] {
+            gap: 0.5rem !important;
+        }
+    }
+    
+    /* 桌面端优化 */
+    @media (min-width: 769px) {
+        .quarter-score-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .quarter-score {
+            min-width: 80px;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -110,7 +182,7 @@ if 'countdown_times' not in st.session_state:
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
 
-# ====== 简化JavaScript动态倒计时 ======
+# ====== JavaScript实现动态倒计时 ======
 st.markdown("""
 <script>
 // 更新页面刷新倒计时
@@ -135,7 +207,7 @@ function updateRefreshCountdown() {
 }
 
 // 每秒更新一次
-setInterval(updateRefreshCountdown, 100000);
+setInterval(updateRefreshCountdown, 1000);
 
 // 初始化
 document.addEventListener('DOMContentLoaded', function() {
@@ -145,7 +217,7 @@ document.addEventListener('DOMContentLoaded', function() {
 """, unsafe_allow_html=True)
 
 # ====== 翻译数据加载 ======
-@st.cache_resource(ttl=600000)
+@st.cache_resource(ttl=600)
 def get_translations():
     try:
         from translations import TEAM_TRANSLATION, PLAYER_TRANSLATION
@@ -180,7 +252,7 @@ def translate_player_name(name):
     return name
 
 # ====== API 数据获取函数 ======
-@st.cache_data(ttl=10, show_spinner=False)  # 缩短缓存时间，加快实时数据更新
+@st.cache_data(ttl=10, show_spinner=False)
 def fetch_nba_schedule(date_str):
     try:
         eastern = pytz.timezone('America/New_York')
@@ -551,29 +623,25 @@ for i, event in enumerate(events):
             if period_info['clock'] and period_info['clock'] != '0:00':
                 clock_display = f"⏱️ {period_info['clock']}"
                 
-            # 修复语法错误：使用单引号包围整个字符串
             period_display = f"**🎯 {period_info['period_text']} {clock_display}**"
             st.markdown(period_display)
             
-            # 显示每节得分
+            # 显示每节得分 - 修复移动端显示
             if period_info['quarter_scores']:
-                st.markdown("**每节比分:**")
+                # 使用更简单的方式显示节次比分，避免使用st.columns
+                st.markdown('<div class="score-title">每节比分:</div>', unsafe_allow_html=True)
                 
-                # 创建列来显示节次比分
-                quarter_cols = st.columns(min(4, len(period_info['quarter_scores'])))
-                
-                for idx, q in enumerate(period_info['quarter_scores']):
-                    if idx < 4:  # 最多显示4列
-                        col_idx = idx % len(quarter_cols)
-                        with quarter_cols[col_idx]:
-                            st.markdown(
-                                f"<div style='background: #f0f2f6; padding: 4px 8px; border-radius: 10px; "
-                                f"font-size: 11px; margin: 2px;'>"
-                                f"**{q['quarter']}**<br>"
-                                f"{q['away_score']}-{q['home_score']}"
-                                f"</div>",
-                                unsafe_allow_html=True
-                            )
+                # 创建HTML容器来显示节次比分
+                scores_html = '<div class="quarter-score-container">'
+                for q in period_info['quarter_scores']:
+                    scores_html += f'''
+                    <div class="quarter-score">
+                        <strong>{q['quarter']}</strong><br>
+                        {q['away_score']}-{q['home_score']}
+                    </div>
+                    '''
+                scores_html += '</div>'
+                st.markdown(scores_html, unsafe_allow_html=True)
                 
                 st.markdown(f"**当前总分: {away_name} {away_score}-{home_score} {home_name}**")
         
@@ -583,23 +651,19 @@ for i, event in enumerate(events):
             
             # 显示所有节次得分
             if period_info['quarter_scores']:
-                st.markdown("**全场比分:**")
+                st.markdown('<div class="score-title">全场比分:</div>', unsafe_allow_html=True)
                 
-                # 创建列来显示节次比分
-                quarter_cols = st.columns(min(4, len(period_info['quarter_scores'])))
-                
-                for idx, q in enumerate(period_info['quarter_scores']):
-                    if idx < 8:  # 最多显示8节（4节+4个加时）
-                        col_idx = idx % len(quarter_cols)
-                        with quarter_cols[col_idx]:
-                            st.markdown(
-                                f"<div style='background: #f0f2f6; padding: 4px 8px; border-radius: 10px; "
-                                f"font-size: 11px; margin: 2px;'>"
-                                f"**{q['quarter']}**<br>"
-                                f"{q['away_score']}-{q['home_score']}"
-                                f"</div>",
-                                unsafe_allow_html=True
-                            )
+                # 创建HTML容器来显示节次比分
+                scores_html = '<div class="quarter-score-container">'
+                for q in period_info['quarter_scores']:
+                    scores_html += f'''
+                    <div class="quarter-score">
+                        <strong>{q['quarter']}</strong><br>
+                        {q['away_score']}-{q['home_score']}
+                    </div>
+                    '''
+                scores_html += '</div>'
+                st.markdown(scores_html, unsafe_allow_html=True)
                 
                 st.markdown(f"**总比分: {away_name} {away_score}-{home_score} {home_name}**")
     
@@ -668,7 +732,7 @@ with col1:
         key='auto_refresh_toggle'
     )
 with col2:
-    interval_options = [100, 300, 600, 1200]
+    interval_options = [10, 30, 60, 120]
     refresh_interval = st.selectbox(
         "刷新间隔(秒)",
         options=interval_options,
@@ -720,5 +784,3 @@ with footer_cols[0]:
 with footer_cols[1]:
     if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
         st.rerun()
-
-

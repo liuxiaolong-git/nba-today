@@ -265,8 +265,8 @@ def get_game_period_info(event):
         
         if len(competitors) >= 2:
             # 修正：第一个是客场队伍，第二个是主场队伍
-            away_competitor = competitors[0]
-            home_competitor = competitors[1]
+            away_competitor = competitors[1]
+            home_competitor = competitors[0]
             
             # 获取总分 - 修正这里，确保away_score对应客场队伍，home_score对应主场队伍
             away_score = away_competitor.get('score', '0')
@@ -679,3 +679,4 @@ with footer_cols[0]:
 with footer_cols[1]:
     if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
         st.rerun()
+

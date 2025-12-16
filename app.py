@@ -4,6 +4,7 @@ import pandas as pd
 import pytz
 from datetime import datetime, timedelta
 import time
+import concurrent.futures # 用于并行请求球员数据
 
 # 移动端优化配置
 st.set_page_config(
@@ -18,12 +19,9 @@ st.markdown("""
 <style>
     /* 移动端适配 */
     @media (max-width: 768px) {
-        /* 主容器调整 */
         .main .block-container {
             padding: 0.5rem !important;
         }
-        
-        /* 比赛卡片 */
         .game-card {
             background: white;
             border-radius: 10px;
@@ -32,43 +30,27 @@ st.markdown("""
             border: 1px solid #e0e0e0;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
-        
-        /* 简化表格 - 默认只显示三列 */
-        .simple-table-container {
+        .simple-table-container, .full-table-container {
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
             margin: 8px 0;
         }
-        
-        /* 完整表格容器 - 水平滚动 */
         .full-table-container {
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            margin: 8px 0;
             border-radius: 8px;
             border: 1px solid #e0e0e0;
         }
-        
-        /* 数据表格优化 */
         .dataframe {
             font-size: 12px !important;
         }
-        
         .dataframe th, .dataframe td {
             padding: 6px 4px !important;
             white-space: nowrap;
         }
-        
-        /* 简化表格的特殊样式 */
-        .simple-table .dataframe {
-            min-width: 300px !important;
+        .stButton > button {
+            min-height: 40px;
+            font-size: 14px;
+            width: 100%;
         }
-        
-        .full-table .dataframe {
-            min-width: 700px !important;
-        }
-        
-        /* 自动刷新控制面板 */
         .refresh-panel {
             background-color: #f8f9fa;
             border-radius: 10px;
@@ -76,44 +58,8 @@ st.markdown("""
             margin-top: 10px;
             border: 1px solid #dee2e6;
         }
-        
-        /* 按钮优化 */
-        .stButton > button {
-            min-height: 40px;
-            font-size: 14px;
-            width: 100%;
-        }
-        
-        /* 列布局 */
-        .stColumn {
-            padding: 4px !important;
-        }
-        
-        /* 标题大小 */
-        h1 {
-            font-size: 20px !important;
-            margin-bottom: 12px !important;
-        }
-        
-        h2, h3 {
-            font-size: 16px !important;
-        }
-        
-        .stSubheader {
-            font-size: 14px !important;
-        }
-        
-        /* 状态标签 */
-        .status-badge {
-            font-size: 11px;
-            padding: 2px 6px;
-            border-radius: 10px;
-            display: inline-block;
-            margin-right: 4px;
-            background-color: #f0f0f0;
-        }
-        
-        /* 球队名称 */
+        h1 { font-size: 20px !important; margin-bottom: 12px !important; }
+        h2, h3 { font-size: 16px !important; }
         .team-name {
             font-size: 14px;
             font-weight: bold;
@@ -122,60 +68,24 @@ st.markdown("""
             text-overflow: ellipsis;
             max-width: 120px;
         }
-        
-        /* 比赛时间 */
-        .game-time {
-            font-size: 12px;
-            color: #666;
-        }
-        
-        /* 倒计时 */
+        .game-time { font-size: 12px; color: #666; }
         .countdown {
             font-weight: bold;
             color: #2196F3;
             font-size: 13px;
         }
-        
-        /* 自动刷新状态 */
-        .auto-refresh-on {
-            color: #4CAF50;
-            font-weight: bold;
-        }
-        .auto-refresh-off {
-            color: #9E9E9E;
-        }
-        
-        /* 分隔线 */
-        .stDivider {
-            margin: 12px 0 !important;
-        }
+        .auto-refresh-on { color: #4CAF50; font-weight: bold; }
+        .auto-refresh-off { color: #9E9E9E; }
     }
-    
-    /* 通用优化 */
-    .mobile-friendly {
-        touch-action: manipulation;
-    }
-    
-    /* 直播比赛指示器 */
-    .live-game {
-        border-left: 4px solid #4CAF50 !important;
-    }
-    
-    /* 已结束比赛 */
-    .finished-game {
-        border-left: 4px solid #9E9E9E !important;
-    }
-    
-    /* 未开始比赛 */
-    .upcoming-game {
-        border-left: 4px solid #2196F3 !important;
-    }
+    .live-game { border-left: 4px solid #4CAF50 !important; }
+    .finished-game { border-left: 4px solid #9E9E9E !important; }
+    .upcoming-game { border-left: 4px solid #2196F3 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("🏀 NBA实时赛程(小包子)")
 
-# ====== 新增自动刷新功能 ======
+# ====== 【核心修复与优化点1：重新设计自动刷新逻辑】 ======
 # 初始化自动刷新相关的session state
 if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = True  # 默认开启自动刷新
@@ -184,131 +94,103 @@ if 'refresh_interval' not in st.session_state:
     st.session_state.refresh_interval = 30  # 默认30秒刷新一次
     
 if 'last_refresh_time' not in st.session_state:
-    st.session_state.last_refresh_time = datetime.now()
-    
-if 'refresh_countdown' not in st.session_state:
-    st.session_state.refresh_countdown = st.session_state.refresh_interval
+    # 使用时间戳而非datetime对象，避免序列化问题
+    st.session_state.last_refresh_time = time.time()
 
 # 初始化其他session state
-if 'refresh_count' not in st.session_state:
-    st.session_state.refresh_count = 0
-    
 if 'untranslated_players' not in st.session_state:
     st.session_state.untranslated_players = set()
-
-# 初始化每个比赛的展开状态
 if 'expanded_games' not in st.session_state:
     st.session_state.expanded_games = {}
 
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
 
-# ====== 从配置文件加载翻译数据 ======
-@st.cache_data(ttl=2592000)
-def load_translations():
-    """加载球队和球员翻译数据"""
+# ====== 【核心优化点2：优化翻译数据加载】 ======
+@st.cache_resource(ttl=600) # 缓存资源，10分钟刷新一次
+def get_translations():
+    """加载并返回翻译字典，使用cache_resource避免重复IO"""
     try:
+        # 假设translations.py在同一目录
         from translations import TEAM_TRANSLATION, PLAYER_TRANSLATION
         return TEAM_TRANSLATION, PLAYER_TRANSLATION
     except ImportError:
-        st.warning("⚠️ 未找到翻译配置文件")
+        # 静默失败，返回空字典，避免警告信息影响加载
         return {}, {}
 
-team_translation, player_translation = load_translations()
+# 预加载翻译数据到变量，后续函数直接使用
+_team_translation, _player_translation = get_translations()
 
 def translate_team_name(name):
-    """翻译球队名称"""
-    return team_translation.get(name, name)
+    return _team_translation.get(name, name)
 
 def translate_player_name(name):
-    """翻译球员名称"""
     if not name:
         return name
-    
     name = name.strip()
-    
-    if name in player_translation:
-        return player_translation[name]
-    
-    # 处理后缀
+    # 直接查找
+    if name in _player_translation:
+        return _player_translation[name]
+    # 处理后缀逻辑 (保持原有)
     name_parts = name.split()
     if len(name_parts) > 1:
         suffixes = ['Jr.', 'Jr', 'Sr.', 'Sr', 'II', 'III', 'IV', 'V']
         if name_parts[-1] in suffixes:
             base_name = ' '.join(name_parts[:-1])
-            if base_name in player_translation:
-                translated_base = player_translation[base_name]
-                suffix = name_parts[-1]
-                suffix_map = {
-                    'Jr.': '小', 'Jr': '小',
-                    'Sr.': '老', 'Sr': '老',
-                    'II': '二世', 'III': '三世', 'IV': '四世', 'V': '五世'
-                }
-                if suffix in suffix_map:
-                    return f"{translated_base}{suffix_map[suffix]}"
-                return translated_base
-    
-    # 尝试标准化匹配
-    normalized = name.replace('.', '')
-    if normalized in player_translation:
-        return player_translation[normalized]
-    
-    # 模糊匹配
-    for eng_name, chi_name in player_translation.items():
-        if eng_name.lower() == name.lower():
-            return chi_name
-    
-    # 记录未翻译的名称
-    invalid_names = ['DNP', 'N/A', '--', '', 'null', 'None']
-    if name not in invalid_names:
+            if base_name in _player_translation:
+                translated = _player_translation[base_name]
+                suffix_map = {'Jr.':'小','Jr':'小','Sr.':'老','Sr':'老','II':'二世','III':'三世','IV':'四世','V':'五世'}
+                return f"{translated}{suffix_map.get(name_parts[-1], '')}"
+    # 记录未翻译的名称（简化判断）
+    if name and name not in ['DNP', 'N/A', '--', '', 'null', 'None']:
         st.session_state.untranslated_players.add(name)
-    
     return name
 
-# ====== API 数据获取函数 ======
-@st.cache_data(ttl=30)
+# ====== 【核心优化点3：优化API请求缓存与性能】 ======
+@st.cache_data(ttl=15, show_spinner=False) # 缩短TTL为15秒，不显示加载spinner
 def fetch_nba_schedule(date_str):
-    """获取NBA赛程"""
+    """获取NBA赛程 - 主API，缓存15秒"""
     try:
         eastern = pytz.timezone('America/New_York')
         beijing_dt = beijing_tz.localize(datetime.strptime(date_str, '%Y-%m-%d'))
         eastern_dt = beijing_dt.astimezone(eastern)
         url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
         params = {'dates': eastern_dt.strftime('%Y%m%d'), 'lang': 'zh', 'region': 'cn'}
-        headers = {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15'}
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        # 设置更短的超时时间，快速失败
+        resp = requests.get(url, params=params, timeout=5)
         resp.raise_for_status()
         return resp.json()
-    except Exception as e:
-        st.error(f"获取赛程失败: {e}")
+    except Exception:
+        # 静默失败，返回None由主逻辑处理
         return None
 
-@st.cache_data(ttl=30)
-def fetch_player_stats(event_id):
-    """获取球员统计数据"""
+def fetch_single_player_stats(event_id):
+    """获取单场比赛球员数据 - 无缓存，用于并行请求"""
     try:
         url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
-        resp = requests.get(url, params={'event': event_id}, 
-                          headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)'}, 
-                          timeout=10)
+        resp = requests.get(url, params={'event': event_id}, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
             if data.get('boxscore') and data.get('boxscore').get('players'):
-                return data
-        
-        url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/boxscore?event={event_id}"
-        resp = requests.get(url, 
-                          headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)'}, 
-                          timeout=10)
-        if resp.status_code == 200:
-            return resp.json()
-            
-        return None
-    except Exception as e:
-        return None
+                return event_id, data
+    except Exception:
+        pass
+    return event_id, None
 
+def fetch_all_player_stats_parallel(event_ids):
+    """并行获取多场比赛的球员数据"""
+    player_stats_map = {}
+    # 限制最大线程数，避免过多并发请求
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(event_ids))) as executor:
+        future_to_id = {executor.submit(fetch_single_player_stats, eid): eid for eid in event_ids}
+        for future in concurrent.futures.as_completed(future_to_id):
+            event_id, data = future.result()
+            if data:
+                player_stats_map[event_id] = data
+    return player_stats_map
+
+# 辅助函数保持不变
 def format_time(t):
-    """格式化时间"""
     if not t or str(t).strip() in ('0', '0:00', '--', '', 'DNP', 'N/A'):
         return '0:00'
     s = str(t).strip()
@@ -321,7 +203,6 @@ def format_time(t):
         return s
 
 def safe_int(value, default=0):
-    """安全地将值转换为整数"""
     if not value:
         return default
     try:
@@ -336,224 +217,100 @@ def parse_player_stats(game_data):
     try:
         if not game_data or 'boxscore' not in game_data:
             return [], []
-            
         players_section = game_data.get('boxscore', {}).get('players', [])
         if not players_section or len(players_section) < 2:
             return [], []
-
-        away_players = players_section[0]
-        home_players = players_section[1]
+        away_players, home_players = players_section[0], players_section[1]
 
         def extract_team_data(team_data):
-            """提取单个球队的球员数据"""
             if not team_data:
                 return []
-                
             stats_list = team_data.get('statistics', [])
-            if not stats_list:
-                return []
-                
-            # 查找主要统计项
             main_stat = None
             for stat in stats_list:
-                athletes = stat.get('athletes', [])
-                labels = stat.get('labels', [])
-                if athletes and ('PTS' in labels or '得分' in labels):
+                if stat.get('athletes') and ('PTS' in stat.get('labels', []) or '得分' in stat.get('labels', [])):
                     main_stat = stat
                     break
-            
             if not main_stat:
                 return []
-                
             labels = main_stat.get('labels', [])
             athletes = main_stat.get('athletes', [])
-            
             parsed = []
             for ath in athletes:
                 try:
-                    # 获取球员名
                     athlete_data = ath.get('athlete', {})
-                    name_en = (athlete_data.get('displayName', '') or 
-                              athlete_data.get('fullName', '') or 
-                              athlete_data.get('shortName', '') or 
-                              ath.get('displayName', '') or 
-                              ath.get('name', ''))
-                    
+                    name_en = (athlete_data.get('displayName') or athlete_data.get('fullName') or 
+                               athlete_data.get('shortName') or ath.get('displayName') or ath.get('name') or '')
                     name_en = str(name_en).strip()
                     if not name_en or name_en in ['DNP', 'N/A', '--', 'null', 'None']:
                         continue
-                    
-                    # 翻译球员名
                     name_cn = translate_player_name(name_en)
-                    
                     raw_vals = ath.get('stats', [])
                     if not raw_vals:
                         continue
-                    
-                    # 创建统计映射
                     stat_map = {}
                     for i, label in enumerate(labels):
                         if i < len(raw_vals):
-                            value = raw_vals[i]
-                            stat_map[label] = str(value).strip() if value else ''
-                    
-                    # 解析投篮数据
-                    def get_shot_value(key, default='0-0'):
-                        value = stat_map.get(key, default)
-                        return str(value) if value else default
-                    
-                    def get_stat_value(key, default='0'):
-                        value = stat_map.get(key, default)
-                        return str(value) if value else default
-                    
-                    # 获取投篮数据
-                    fg_str = get_shot_value('FG', '0-0').replace('/', '-')
-                    three_str = get_shot_value('3PT', '0-0').replace('/', '-')
-                    ft_str = get_shot_value('FT', '0-0').replace('/', '-')
-                    
-                    # 分割投篮数据
-                    fg_parts = fg_str.split('-') if '-' in fg_str else ('0', '0')
-                    three_parts = three_str.split('-') if '-' in three_str else ('0', '0')
-                    ft_parts = ft_str.split('-') if '-' in ft_str else ('0', '0')
-                    
-                    fgm = fg_parts[0] if len(fg_parts) >= 1 else '0'
-                    fga = fg_parts[1] if len(fg_parts) >= 2 else '0'
-                    threepm = three_parts[0] if len(three_parts) >= 1 else '0'
-                    threepa = three_parts[1] if len(three_parts) >= 2 else '0'
-                    ftm = ft_parts[0] if len(ft_parts) >= 1 else '0'
-                    fta = ft_parts[1] if len(ft_parts) >= 2 else '0'
-                    
-                    # 安全转换数字
-                    def safe_num(val):
-                        try:
-                            num = float(val)
-                            return str(int(num)) if num.is_integer() else str(round(num, 1))
-                        except:
-                            return '0'
-                    
-                    # 获取其他统计
-                    minutes = format_time(stat_map.get('MIN', '0'))
-                    pts = safe_num(get_stat_value('PTS', '0'))
-                    reb = safe_num(get_stat_value('REB', '0'))
-                    ast = safe_num(get_stat_value('AST', '0'))
-                    tov = safe_num(get_stat_value('TO', '0'))
-                    
-                    # 创建球员数据字典 - 保持原始列结构
+                            val = raw_vals[i]
+                            stat_map[label] = str(val).strip() if val is not None else ''
+                    # 简化统计值获取
+                    def get_stat(k, d='0'): return stat_map.get(k, d)
+                    def get_shot(k, d='0-0'): return get_stat(k, d).replace('/', '-')
+                    fg_part = get_shot('FG', '0-0').split('-')
+                    three_part = get_shot('3PT', '0-0').split('-')
+                    ft_part = get_shot('FT', '0-0').split('-')
                     player_data = {
                         '球员': name_cn,
-                        '时间': minutes,
-                        '得分': pts,
-                        '投篮': f"{fgm}/{fga}",
-                        '三分': f"{threepm}/{threepa}",
-                        '罚球': f"{ftm}/{fta}",
-                        '篮板': reb,
-                        '助攻': ast,
-                        '失误': tov
+                        '时间': format_time(get_stat('MIN', '0')),
+                        '得分': get_stat('PTS', '0'),
+                        '投篮': f"{fg_part[0] if len(fg_part)>1 else '0'}/{fg_part[1] if len(fg_part)>1 else '0'}",
+                        '三分': f"{three_part[0] if len(three_part)>1 else '0'}/{three_part[1] if len(three_part)>1 else '0'}",
+                        '罚球': f"{ft_part[0] if len(ft_part)>1 else '0'}/{ft_part[1] if len(ft_part)>1 else '0'}",
+                        '篮板': get_stat('REB', '0'),
+                        '助攻': get_stat('AST', '0'),
+                        '失误': get_stat('TO', '0')
                     }
-                    
-                    # 只添加有数据的球员
-                    has_data = False
-                    if (safe_int(pts) > 0 or safe_int(reb) > 0 or safe_int(ast) > 0 or 
-                        safe_int(fgm) > 0 or safe_int(threepm) > 0 or safe_int(ftm) > 0):
-                        has_data = True
-                    
-                    if minutes != '0:00' and minutes != '0':
-                        has_data = True
-                    
-                    if has_data:
+                    # 简化数据有效性检查
+                    if (safe_int(player_data['得分']) > 0 or safe_int(player_data['篮板']) > 0 or 
+                        safe_int(player_data['助攻']) > 0 or player_data['时间'] not in ('0:00', '0')):
                         parsed.append(player_data)
-                        
                 except Exception:
                     continue
-            
             return parsed
-
         away_data = extract_team_data(away_players)
         home_data = extract_team_data(home_players)
-
         return away_data, home_data
-
-    except Exception as e:
+    except Exception:
         return [], []
 
-# ====== 简化的表格显示函数 ======
 def display_simple_table(players_data, team_name):
     """显示简化的表格（只显示球员、时间、得分）"""
     if not players_data:
         st.info("暂无球员数据")
         return
-    
-    # 按得分排序
-    players_data = sorted(players_data, key=lambda x: safe_int(x['得分'], 0), reverse=True)
-    
-    # 只取前10名球员（移动端节省空间）
-    players_data = players_data[:10]
-    
-    # 创建只包含三列的DataFrame
-    simple_data = []
-    for player in players_data:
-        simple_data.append({
-            '球员': player['球员'],
-            '时间': player['时间'],
-            '得分': player['得分']
-        })
-    
+    players_data = sorted(players_data, key=lambda x: safe_int(x['得分'], 0), reverse=True)[:10]
+    simple_data = [{'球员': p['球员'], '时间': p['时间'], '得分': p['得分']} for p in players_data]
     df = pd.DataFrame(simple_data)
-    
     if not df.empty:
         st.markdown('<div class="simple-table-container">', unsafe_allow_html=True)
-        st.dataframe(
-            df,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "球员": st.column_config.TextColumn(width="medium"),
-                "时间": st.column_config.TextColumn(width="small"),
-                "得分": st.column_config.NumberColumn(width="small")
-            }
-        )
+        st.dataframe(df, hide_index=True, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        st.info("暂无球员数据")
 
-# ====== 完整的表格显示函数 ======
 def display_full_table(players_data):
     """显示完整的球员数据表格"""
     if not players_data:
         st.info("暂无球员数据")
         return
-    
     df = pd.DataFrame(players_data)
     if not df.empty:
-        # 按得分排序
         df['得分'] = pd.to_numeric(df['得分'], errors='coerce')
         df = df.sort_values('得分', ascending=False)
         df['得分'] = df['得分'].astype(str)
-        
-        # 显示完整表格（支持水平滚动）
         st.markdown('<div class="full-table-container">', unsafe_allow_html=True)
-        st.dataframe(
-            df,
-            hide_index=True,
-            use_container_width=True,
-            column_order=['球员', '时间', '得分', '投篮', '三分', '罚球', '篮板', '助攻', '失误'],
-            column_config={
-                "球员": st.column_config.TextColumn(width="medium"),
-                "时间": st.column_config.TextColumn(width="small"),
-                "得分": st.column_config.NumberColumn(width="small"),
-                "投篮": st.column_config.TextColumn(width="small"),
-                "三分": st.column_config.TextColumn(width="small"),
-                "罚球": st.column_config.TextColumn(width="small"),
-                "篮板": st.column_config.NumberColumn(width="small"),
-                "助攻": st.column_config.NumberColumn(width="small"),
-                "失误": st.column_config.NumberColumn(width="small")
-            }
-        )
+        st.dataframe(df, hide_index=True, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        st.info("暂无球员数据")
 
-# ====== 移动端优化的Streamlit界面 ======
+# ====== 【核心修复与优化点4：优化主界面与数据加载流程】 ======
 # 顶部工具栏 - 移动端友好
 col1, col2 = st.columns([3, 1])
 with col1:
@@ -566,16 +323,33 @@ with col1:
     )
 
 with col2:
-    if st.button("🔄 刷新", use_container_width=True):
-        st.cache_data.clear()
-        st.session_state.last_refresh_time = datetime.now()
-        st.session_state.refresh_countdown = st.session_state.refresh_interval
-        st.rerun()
+    manual_refresh_clicked = st.button("🔄 刷新", use_container_width=True, key='manual_refresh_top')
 
+# 【自动刷新触发逻辑】放在页面主要渲染之前，确保能被执行
+current_time = time.time()
+time_since_last_refresh = current_time - st.session_state.last_refresh_time
+countdown_seconds = max(0, st.session_state.refresh_interval - int(time_since_last_refresh))
+
+# 决定是否需要刷新：手动点击 OR (自动开启 AND 倒计时结束)
+need_refresh = False
+if manual_refresh_clicked:
+    need_refresh = True
+    st.session_state.last_refresh_time = current_time
+    st.cache_data.clear()
+elif st.session_state.auto_refresh and countdown_seconds <= 0:
+    need_refresh = True
+    st.session_state.last_refresh_time = current_time
+    st.cache_data.clear()
+
+# 如果需要刷新，则重新运行
+if need_refresh:
+    st.experimental_rerun()
+
+# 显示日期标题
 st.subheader(f"📅 {selected_date.strftime('%Y年%m月%d日')}")
 
-# 加载数据
-with st.spinner("加载赛程..."):
+# 加载主赛程数据（带缓存）
+with st.spinner("快速加载赛程..."):
     schedule = fetch_nba_schedule(selected_date.strftime('%Y-%m-%d'))
 
 if not schedule or 'events' not in schedule:
@@ -587,16 +361,28 @@ if not events:
     st.info("今日无比赛")
     st.stop()
 
-# 显示比赛列表（移动端优化）
+# ====== 【核心优化点5：并行加载球员数据】 ======
+# 识别需要球员数据的比赛（进行中或已结束）
+live_or_post_event_ids = []
+for event in events:
+    status_type = event.get('status', {}).get('type', {})
+    if status_type.get('state', 'pre') in ['in', 'post']:
+        live_or_post_event_ids.append(event['id'])
+
+player_stats_map = {}
+if live_or_post_event_ids:
+    # 并行请求球员数据
+    with st.spinner("同步球员数据..."):
+        player_stats_map = fetch_all_player_stats_parallel(live_or_post_event_ids)
+
+# 渲染比赛列表
 for i, event in enumerate(events):
     comp = event.get('competitions', [{}])[0]
     competitors = comp.get('competitors', [])
     if len(competitors) < 2:
         continue
 
-    home = competitors[0]
-    away = competitors[1]
-
+    home, away = competitors[0], competitors[1]
     home_name = translate_team_name(home.get('team', {}).get('displayName', '主队'))
     away_name = translate_team_name(away.get('team', {}).get('displayName', '客队'))
     home_score = home.get('score', '0')
@@ -606,18 +392,13 @@ for i, event in enumerate(events):
     state = status_type.get('state', 'pre')
     desc = status_type.get('description', '未开始')
     
-    # 确定比赛状态和CSS类
     if state == 'in':
-        status_badge = "🟢 直播中"
-        game_class = "live-game"
+        status_badge, game_class = "🟢 直播中", "live-game"
     elif state == 'post':
-        status_badge = "⚫ 已结束"
-        game_class = "finished-game"
+        status_badge, game_class = "⚫ 已结束", "finished-game"
     else:
-        status_badge = "⏳ 未开始"
-        game_class = "upcoming-game"
+        status_badge, game_class = "⏳ 未开始", "upcoming-game"
 
-    # 比赛时间
     try:
         utc_time = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
         bj_time = utc_time.astimezone(beijing_tz).strftime("%H:%M")
@@ -625,203 +406,131 @@ for i, event in enumerate(events):
         bj_time = "时间待定"
 
     # 比赛卡片
-    st.markdown(f'<div class="game-card {game_class} mobile-friendly">', unsafe_allow_html=True)
-    
-    # 比赛基本信息 - 移动端优化布局
+    st.markdown(f'<div class="game-card {game_class}">', unsafe_allow_html=True)
     cols = st.columns([2, 1, 2])
     with cols[0]:
         st.markdown(f'<div class="team-name">{away_name}</div>', unsafe_allow_html=True)
         st.markdown(f'**{away_score}**')
-    
     with cols[1]:
-        st.markdown("**VS**", help="客队 VS 主队")
+        st.markdown("**VS**")
         st.markdown(f'<div class="game-time">{bj_time}</div>', unsafe_allow_html=True)
-    
     with cols[2]:
         st.markdown(f'<div class="team-name">{home_name}</div>', unsafe_allow_html=True)
         st.markdown(f'**{home_score}**')
-    
-    # 状态信息
     st.markdown(f'<span class="status-badge">{status_badge}</span> {desc}', unsafe_allow_html=True)
     
-    # 球员数据 - 默认只显示简化版
+    # 球员数据
     if state in ['in', 'post']:
-        with st.spinner("加载球员数据..."):
-            game_data = fetch_player_stats(event['id'])
-            if game_data:
-                away_p, home_p = parse_player_stats(game_data)
-                
-                if away_p or home_p:
-                    # 为每个比赛创建唯一的key
-                    game_key = f"game_{event['id']}"
-                    
-                    # 初始化展开状态
-                    if game_key not in st.session_state.expanded_games:
-                        st.session_state.expanded_games[game_key] = {
-                            'away_expanded': False,
-                            'home_expanded': False
-                        }
-                    
-                    # 显示球员数据标题
-                    st.markdown("---")
-                    st.markdown("**球员数据**")
-                    
-                    # 使用标签页切换主客队
-                    tab1, tab2 = st.tabs([f"👤 {away_name}", f"👤 {home_name}"])
-                    
-                    with tab1:
-                        if away_p:
-                            # 默认显示简化表格
-                            st.markdown(f"**{away_name}**")
-                            display_simple_table(away_p, away_name)
-                            
-                            # 展开/收起详细数据按钮
-                            col_btn1, col_btn2 = st.columns([1, 1])
-                            with col_btn1:
-                                if st.button("📊 详细数据", key=f"expand_away_{event['id']}", 
-                                          use_container_width=True, 
-                                          type="secondary" if not st.session_state.expanded_games[game_key]['away_expanded'] else "primary"):
-                                    st.session_state.expanded_games[game_key]['away_expanded'] = not st.session_state.expanded_games[game_key]['away_expanded']
-                            
-                            with col_btn2:
-                                if st.button("📈 得分榜", key=f"score_away_{event['id']}", use_container_width=True):
-                                    # 显示得分前三名
-                                    top_scorers = sorted(away_p, key=lambda x: safe_int(x['得分'], 0), reverse=True)[:3]
-                                    if top_scorers:
-                                        st.info("得分前三:")
-                                        for idx, player in enumerate(top_scorers, 1):
-                                            st.write(f"{idx}. {player['球员']} - {player['得分']}分")
-                            
-                            # 如果展开，显示完整表格
-                            if st.session_state.expanded_games[game_key]['away_expanded']:
-                                st.markdown("**详细数据**")
-                                display_full_table(away_p)
-                        else:
-                            st.info("暂无球员数据")
-                    
-                    with tab2:
-                        if home_p:
-                            # 默认显示简化表格
-                            st.markdown(f"**{home_name}**")
-                            display_simple_table(home_p, home_name)
-                            
-                            # 展开/收起详细数据按钮
-                            col_btn1, col_btn2 = st.columns([1, 1])
-                            with col_btn1:
-                                if st.button("📊 详细数据", key=f"expand_home_{event['id']}", 
-                                          use_container_width=True, 
-                                          type="secondary" if not st.session_state.expanded_games[game_key]['home_expanded'] else "primary"):
-                                    st.session_state.expanded_games[game_key]['home_expanded'] = not st.session_state.expanded_games[game_key]['home_expanded']
-                            
-                            with col_btn2:
-                                if st.button("📈 得分榜", key=f"score_home_{event['id']}", use_container_width=True):
-                                    # 显示得分前三名
-                                    top_scorers = sorted(home_p, key=lambda x: safe_int(x['得分'], 0), reverse=True)[:3]
-                                    if top_scorers:
-                                        st.info("得分前三:")
-                                        for idx, player in enumerate(top_scorers, 1):
-                                            st.write(f"{idx}. {player['球员']} - {player['得分']}分")
-                            
-                            # 如果展开，显示完整表格
-                            if st.session_state.expanded_games[game_key]['home_expanded']:
-                                st.markdown("**详细数据**")
-                                display_full_table(home_p)
-                        else:
-                            st.info("暂无球员数据")
-                else:
-                    st.info("球员数据暂未更新")
-    
+        game_data = player_stats_map.get(event['id'])
+        if game_data:
+            away_p, home_p = parse_player_stats(game_data)
+            if away_p or home_p:
+                game_key = f"game_{event['id']}"
+                if game_key not in st.session_state.expanded_games:
+                    st.session_state.expanded_games[game_key] = {'away_expanded': False, 'home_expanded': False}
+                st.markdown("---")
+                st.markdown("**球员数据**")
+                tab1, tab2 = st.tabs([f"👤 {away_name}", f"👤 {home_name}"])
+                with tab1:
+                    if away_p:
+                        st.markdown(f"**{away_name}**")
+                        display_simple_table(away_p, away_name)
+                        col_btn1, _ = st.columns([1, 1]) # 【修改：移除得分榜列】
+                        with col_btn1:
+                            if st.button("📊 详细数据", key=f"expand_away_{event['id']}", 
+                                      use_container_width=True, 
+                                      type="secondary" if not st.session_state.expanded_games[game_key]['away_expanded'] else "primary"):
+                                st.session_state.expanded_games[game_key]['away_expanded'] = not st.session_state.expanded_games[game_key]['away_expanded']
+                        if st.session_state.expanded_games[game_key]['away_expanded']:
+                            st.markdown("**详细数据**")
+                            display_full_table(away_p)
+                    else:
+                        st.info("暂无球员数据")
+                with tab2:
+                    if home_p:
+                        st.markdown(f"**{home_name}**")
+                        display_simple_table(home_p, home_name)
+                        col_btn1, _ = st.columns([1, 1]) # 【修改：移除得分榜列】
+                        with col_btn1:
+                            if st.button("📊 详细数据", key=f"expand_home_{event['id']}", 
+                                      use_container_width=True, 
+                                      type="secondary" if not st.session_state.expanded_games[game_key]['home_expanded'] else "primary"):
+                                st.session_state.expanded_games[game_key]['home_expanded'] = not st.session_state.expanded_games[game_key]['home_expanded']
+                        if st.session_state.expanded_games[game_key]['home_expanded']:
+                            st.markdown("**详细数据**")
+                            display_full_table(home_p)
+                    else:
+                        st.info("暂无球员数据")
     st.markdown('</div>', unsafe_allow_html=True)
-    
-    # 比赛之间的分隔线
     if i < len(events) - 1:
         st.divider()
 
-# ====== 新增自动刷新控制面板 ======
+# ====== 【核心修复与优化点6：修复的自动刷新控制面板】 ======
 st.markdown("---")
-
-# 自动刷新控制面板
 st.markdown('<div class="refresh-panel">', unsafe_allow_html=True)
 st.markdown("### 🔄 自动刷新控制")
 
-# 控制开关和设置
 col1, col2, col3 = st.columns([1, 1, 1])
-
 with col1:
+    # 此处的任何变更都会触发脚本重新运行
     auto_refresh = st.toggle(
         "自动刷新", 
         value=st.session_state.auto_refresh,
-        help="开启后页面会自动定期刷新"
+        help="开启后页面会自动定期刷新",
+        key='auto_refresh_toggle' # 为toggle设置唯一key
     )
-    # 更新session state
-    if auto_refresh != st.session_state.auto_refresh:
-        st.session_state.auto_refresh = auto_refresh
-        st.session_state.last_refresh_time = datetime.now()
-        st.session_state.refresh_countdown = st.session_state.refresh_interval
-        st.rerun()
-
 with col2:
     interval_options = [10, 30, 60, 120]
     refresh_interval = st.selectbox(
         "刷新间隔(秒)",
         options=interval_options,
         index=interval_options.index(st.session_state.refresh_interval) if st.session_state.refresh_interval in interval_options else 1,
-        help="设置自动刷新的时间间隔"
+        help="设置自动刷新的时间间隔",
+        key='refresh_interval_select' # 为selectbox设置唯一key
     )
-    # 更新session state
-    if refresh_interval != st.session_state.refresh_interval:
-        st.session_state.refresh_interval = refresh_interval
-        st.session_state.refresh_countdown = refresh_interval
-        st.rerun()
-
 with col3:
-    # 计算倒计时
-    current_time = datetime.now()
-    time_diff = (current_time - st.session_state.last_refresh_time).total_seconds()
-    st.session_state.refresh_countdown = max(0, st.session_state.refresh_interval - int(time_diff))
+    # 更新session state值
+    if st.session_state.auto_refresh != auto_refresh:
+        st.session_state.auto_refresh = auto_refresh
+    if st.session_state.refresh_interval != refresh_interval:
+        st.session_state.refresh_interval = refresh_interval
+        st.session_state.last_refresh_time = current_time # 重置刷新时间
     
-    # 显示状态和倒计时
+    # 显示状态
     if st.session_state.auto_refresh:
-        status_text = "状态: <span class='auto-refresh-on'>开启</span>"
-        countdown_text = f"倒计时: <span class='countdown'>{st.session_state.refresh_countdown}秒</span>"
+        status_text = f"状态: <span class='auto-refresh-on'>开启</span>"
+        countdown_text = f"倒计时: <span class='countdown'>{countdown_seconds}秒</span>"
     else:
         status_text = "状态: <span class='auto-refresh-off'>关闭</span>"
         countdown_text = "倒计时: --"
-    
     st.markdown(status_text, unsafe_allow_html=True)
     st.markdown(countdown_text, unsafe_allow_html=True)
 
-# 手动刷新按钮
-if st.button("🔄 立即手动刷新", use_container_width=True, type="primary"):
+# 手动刷新按钮（底部）
+if st.button("🔄 立即手动刷新", use_container_width=True, type="primary", key='manual_refresh_bottom'):
+    st.session_state.last_refresh_time = time.time()
     st.cache_data.clear()
-    st.session_state.last_refresh_time = datetime.now()
-    st.session_state.refresh_countdown = st.session_state.refresh_interval
-    st.rerun()
+    st.experimental_rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
 
-# ====== 自动刷新逻辑 ======
-# 如果自动刷新开启且倒计时结束，则自动刷新页面
-if st.session_state.auto_refresh and st.session_state.refresh_countdown <= 0:
-    # 更新最后刷新时间
-    st.session_state.last_refresh_time = datetime.now()
-    st.session_state.refresh_countdown = st.session_state.refresh_interval
-    
-    # 显示刷新提示
-    refresh_msg = st.empty()
-    refresh_msg.info("🔄 正在自动刷新数据...")
-    
-    # 短暂延迟后刷新
-    time.sleep(1)
-    refresh_msg.empty()
-    st.cache_data.clear()
-    st.rerun()
+# ====== 【核心修复点7：实现自动刷新的关键 - 前端元刷新】 ======
+# 仅当自动刷新开启时，向前端注入HTML meta refresh标签
+if st.session_state.auto_refresh:
+    # 注：这里设置的刷新时间比间隔多1秒，给页面渲染留出时间
+    refresh_seconds = st.session_state.refresh_interval + 1
+    st.markdown(f"""
+    <meta http-equiv="refresh" content="{refresh_seconds}">
+    """, unsafe_allow_html=True)
+    # 可选：在开发模式下显示一个小提示
+    # st.caption(f"⏱️ 页面将在 {refresh_seconds} 秒后自动刷新...")
 
 # 页脚信息
 st.divider()
 footer_cols = st.columns([3, 1])
 with footer_cols[0]:
-    st.caption(f"更新时间: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
+    st.caption(f"最后更新: {datetime.now(beijing_tz).strftime('%H:%M:%S')} | 刷新间隔: {st.session_state.refresh_interval}秒")
 with footer_cols[1]:
-    if st.button("⬆️ 返回顶部", use_container_width=True):
-        st.rerun()
+    if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
+        # 返回顶部通过重新运行实现，清空状态
+        st.experimental_rerun()

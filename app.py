@@ -265,8 +265,8 @@ def get_game_period_info(event):
         
         if len(competitors) >= 2:
             # 修正：第一个是客场队伍，第二个是主场队伍
-            away_competitor = competitors[1]
-            home_competitor = competitors[0]
+            away_competitor = competitors[0]
+            home_competitor = competitors[1]
             
             # 获取总分 - 修正这里，确保away_score对应客场队伍，home_score对应主场队伍
             away_score = away_competitor.get('score', '0')
@@ -350,7 +350,7 @@ def parse_player_stats(game_data):
         players_section = game_data.get('boxscore', {}).get('players', [])
         if not players_section or len(players_section) < 2:
             return [], []
-        away_players, home_players = players_section[0], players_section[1]
+        away_players, home_players = players_section[1], players_section[0]
 
         def extract_team_data(team_data):
             if not team_data:
@@ -679,4 +679,5 @@ with footer_cols[0]:
 with footer_cols[1]:
     if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
         st.rerun()
+
 

@@ -5,6 +5,7 @@ import pytz
 from datetime import datetime, timedelta
 import time
 import concurrent.futures
+import json
 
 # 移动端优化配置
 st.set_page_config(
@@ -14,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 移动端优化的CSS - 修复CSS选择器
+# 移动端优化的CSS
 st.markdown("""
 <style>
     @media (max-width: 768px) {
@@ -49,13 +50,6 @@ st.markdown("""
             color: white; padding: 6px 12px; border-radius: 20px;
             font-size: 12px; display: inline-block; margin: 4px 0;
         }
-        /* 移除之前的.score-quarter样式，使用新的选择器 */
-        .score-display {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            margin-top: 8px;
-        }
         .quarter-score {
             background: #f0f2f6;
             padding: 4px 8px;
@@ -87,10 +81,26 @@ st.markdown("""
         background: #e8f5e9;
         color: #2e7d32;
     }
-    /* 添加比赛状态颜色 */
-    .status-in { color: #4CAF50; }
-    .status-post { color: #9E9E9E; }
-    .status-pre { color: #2196F3; }
+    /* AJAX加载动画 */
+    .ajax-loading {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 2px solid #f3f3f3;
+        border-top: 2px solid #3498db;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-left: 10px;
+        vertical-align: middle;
+    }
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    .ajax-updated {
+        background-color: rgba(144, 238, 144, 0.3);
+        transition: background-color 0.5s ease;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -115,74 +125,236 @@ if 'expanded_games' not in st.session_state:
 if 'game_period_info' not in st.session_state:
     st.session_state.game_period_info = {}
 
-if 'countdown_times' not in st.session_state:
-    st.session_state.countdown_times = {}
+if 'live_game_ids' not in st.session_state:
+    st.session_state.live_game_ids = []
+
+if 'last_ajax_update' not in st.session_state:
+    st.session_state.last_ajax_update = {}
+
+if 'selected_date' not in st.session_state:
+    st.session_state.selected_date = datetime.now(pytz.timezone('Asia/Shanghai')).date()
 
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
 
-# ====== JavaScript实现动态倒计时 ======
+# ====== JavaScript实现局部刷新 ======
 st.markdown("""
 <script>
-// 动态更新倒计时
-function updateCountdown() {
-    // 更新比赛时钟倒计时
-    const countdownElements = document.querySelectorAll('[id^="game-clock-"]');
-    countdownElements.forEach(el => {
-        const gameId = el.id.replace('game-clock-', '');
-        const secondsEl = document.getElementById('game-clock-seconds-' + gameId);
+// 存储游戏状态和时钟
+let gameStates = {};
+
+// AJAX局部刷新函数
+async function refreshLiveGames() {
+    const liveGameElements = document.querySelectorAll('.live-game[data-game-id]');
+    const gameIds = Array.from(liveGameElements).map(el => el.getAttribute('data-game-id'));
+    
+    if (gameIds.length === 0) return;
+    
+    // 显示加载状态
+    gameIds.forEach(id => {
+        const loadingEl = document.getElementById(`loading-${id}`);
+        if (loadingEl) {
+            loadingEl.style.display = 'inline-block';
+        }
+    });
+    
+    try {
+        // 调用Streamlit后端API获取实时数据
+        const response = await fetch('/_stcore/stream', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                event: 'refresh_live_games',
+                game_ids: gameIds
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            // 更新每个游戏的数据
+            for (const gameId in data) {
+                const gameData = data[gameId];
+                updateGameElement(gameId, gameData);
+                
+                // 显示更新提示
+                const gameElement = document.querySelector(`[data-game-id="${gameId}"]`);
+                if (gameElement) {
+                    gameElement.classList.add('ajax-updated');
+                    setTimeout(() => {
+                        gameElement.classList.remove('ajax-updated');
+                    }, 1000);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('刷新失败:', error);
+    } finally {
+        // 隐藏加载状态
+        gameIds.forEach(id => {
+            const loadingEl = document.getElementById(`loading-${id}`);
+            if (loadingEl) {
+                loadingEl.style.display = 'none';
+            }
+        });
+    }
+}
+
+// 更新游戏元素
+function updateGameElement(gameId, gameData) {
+    // 更新比分
+    const awayScoreEl = document.getElementById(`score-away-${gameId}`);
+    const homeScoreEl = document.getElementById(`score-home-${gameId}`);
+    
+    if (awayScoreEl && gameData.away_score !== undefined) {
+        awayScoreEl.textContent = gameData.away_score;
+    }
+    if (homeScoreEl && gameData.home_score !== undefined) {
+        homeScoreEl.textContent = gameData.home_score;
+    }
+    
+    // 更新节次信息
+    const periodEl = document.getElementById(`period-${gameId}`);
+    const clockEl = document.getElementById(`clock-${gameId}`);
+    
+    if (periodEl && gameData.period_text) {
+        periodEl.textContent = gameData.period_text;
+    }
+    if (clockEl && gameData.clock) {
+        clockEl.textContent = gameData.clock;
+        
+        // 更新时钟倒计时
+        if (gameData.clock_seconds) {
+            const secondsEl = document.getElementById(`clock-seconds-${gameId}`);
+            if (secondsEl) {
+                secondsEl.setAttribute('data-seconds', gameData.clock_seconds);
+            }
+        }
+    }
+    
+    // 更新节次比分
+    if (gameData.quarter_scores && gameData.quarter_scores.length > 0) {
+        const scoresContainer = document.getElementById(`scores-${gameId}`);
+        if (scoresContainer) {
+            scoresContainer.innerHTML = '';
+            gameData.quarter_scores.forEach(quarter => {
+                const quarterEl = document.createElement('span');
+                quarterEl.className = 'quarter-score';
+                quarterEl.innerHTML = `<strong>${quarter.quarter}</strong><br>${quarter.away_score}-${quarter.home_score}`;
+                scoresContainer.appendChild(quarterEl);
+            });
+        }
+    }
+}
+
+// 时钟倒计时函数
+function updateClocks() {
+    const clockElements = document.querySelectorAll('[id^="clock-"]');
+    clockElements.forEach(clockEl => {
+        const gameId = clockEl.id.replace('clock-', '');
+        const secondsEl = document.getElementById(`clock-seconds-${gameId}`);
+        
         if (secondsEl) {
             let seconds = parseInt(secondsEl.getAttribute('data-seconds'));
             if (seconds > 0) {
                 seconds--;
                 secondsEl.setAttribute('data-seconds', seconds);
+                
                 const minutes = Math.floor(seconds / 60);
                 const secs = seconds % 60;
-                el.textContent = `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+                clockEl.textContent = `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
             } else if (seconds === 0) {
-                el.textContent = "0:00";
+                clockEl.textContent = "0:00";
+                // 时钟到0时触发刷新
+                refreshLiveGames();
             }
         }
     });
-    
-    // 更新页面刷新倒计时
+}
+
+// 页面刷新倒计时
+let pageRefreshCountdown = 0;
+let pageRefreshInterval = 30;
+
+function updatePageRefreshCountdown() {
     const refreshCountdownEl = document.getElementById('refresh-countdown');
     if (refreshCountdownEl) {
-        let refreshSeconds = parseInt(refreshCountdownEl.getAttribute('data-seconds'));
-        if (refreshSeconds > 0) {
-            refreshSeconds--;
-            refreshCountdownEl.setAttribute('data-seconds', refreshSeconds);
-            refreshCountdownEl.textContent = `${refreshSeconds}秒`;
-            if (refreshSeconds <= 5) {
+        if (pageRefreshCountdown > 0) {
+            pageRefreshCountdown--;
+            refreshCountdownEl.textContent = `${pageRefreshCountdown}秒`;
+            if (pageRefreshCountdown <= 5) {
                 refreshCountdownEl.classList.add('pulse-animation');
             } else {
                 refreshCountdownEl.classList.remove('pulse-animation');
             }
-        } else if (refreshSeconds <= 0) {
-            // 自动刷新
-            window.location.reload();
+        } else if (pageRefreshCountdown <= 0) {
+            // 重置倒计时
+            pageRefreshCountdown = pageRefreshInterval;
+            // 执行局部刷新而不是整个页面刷新
+            refreshLiveGames();
         }
     }
 }
 
-// 每秒钟更新一次
-setInterval(updateCountdown, 1000);
+// 设置自动刷新
+let autoRefresh = true;
 
-// 初始化
+// 初始化函数
+function initAutoRefresh() {
+    // 从页面元素获取设置
+    const autoRefreshToggle = document.getElementById('auto-refresh-toggle');
+    const refreshIntervalSelect = document.getElementById('refresh-interval-select');
+    
+    if (autoRefreshToggle) {
+        autoRefresh = autoRefreshToggle.checked;
+    }
+    
+    if (refreshIntervalSelect) {
+        pageRefreshInterval = parseInt(refreshIntervalSelect.value);
+        pageRefreshCountdown = pageRefreshInterval;
+    }
+    
+    // 每秒更新一次时钟
+    setInterval(updateClocks, 1000);
+    
+    // 每秒更新一次页面刷新倒计时
+    if (autoRefresh) {
+        setInterval(updatePageRefreshCountdown, 1000);
+    }
+    
+    // 每10秒刷新一次进行中的比赛
+    setInterval(refreshLiveGames, 10000);
+    
+    // 初始刷新
+    setTimeout(refreshLiveGames, 2000);
+}
+
+// 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
-    updateCountdown();
-    // 初始化时钟显示
-    const clockElements = document.querySelectorAll('[id^="game-clock-"]');
-    clockElements.forEach(el => {
-        const gameId = el.id.replace('game-clock-', '');
-        const secondsEl = document.getElementById('game-clock-seconds-' + gameId);
-        if (secondsEl) {
-            let seconds = parseInt(secondsEl.getAttribute('data-seconds'));
-            const minutes = Math.floor(seconds / 60);
-            const secs = seconds % 60;
-            el.textContent = `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
-        }
-    });
+    // 延迟初始化以确保所有元素都已加载
+    setTimeout(initAutoRefresh, 1000);
+    
+    // 监听自动刷新开关变化
+    const autoRefreshToggle = document.getElementById('auto-refresh-toggle');
+    if (autoRefreshToggle) {
+        autoRefreshToggle.addEventListener('change', function() {
+            autoRefresh = this.checked;
+            if (autoRefresh) {
+                pageRefreshCountdown = pageRefreshInterval;
+            }
+        });
+    }
+    
+    // 监听刷新间隔变化
+    const refreshIntervalSelect = document.getElementById('refresh-interval-select');
+    if (refreshIntervalSelect) {
+        refreshIntervalSelect.addEventListener('change', function() {
+            pageRefreshInterval = parseInt(this.value);
+            pageRefreshCountdown = pageRefreshInterval;
+        });
+    }
 });
 </script>
 """, unsafe_allow_html=True)
@@ -225,6 +397,7 @@ def translate_player_name(name):
 # ====== API 数据获取函数 ======
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_nba_schedule(date_str):
+    """获取赛程数据，缓存时间较长"""
     try:
         eastern = pytz.timezone('America/New_York')
         beijing_dt = beijing_tz.localize(datetime.strptime(date_str, '%Y-%m-%d'))
@@ -236,6 +409,94 @@ def fetch_nba_schedule(date_str):
         return resp.json()
     except Exception:
         return None
+
+@st.cache_data(ttl=5, show_spinner=False)  # 短缓存，用于实时数据
+def fetch_live_game_data(game_id):
+    """获取单个进行中比赛的数据，缓存时间很短"""
+    try:
+        url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
+        resp = requests.get(url, params={'event': game_id}, timeout=2)
+        if resp.status_code == 200:
+            data = resp.json()
+            
+            # 从摘要数据中提取比赛信息
+            competitions = data.get('header', {}).get('competitions', [{}])
+            if competitions:
+                competition = competitions[0]
+                status = competition.get('status', {})
+                
+                # 获取节次和时钟
+                period = status.get('period', 0)
+                clock = status.get('displayClock', '')
+                
+                # 将时钟转换为秒数
+                clock_seconds = 0
+                if clock and clock != '0:00' and clock != '0':
+                    if ':' in clock:
+                        try:
+                            minutes, seconds = clock.split(':')
+                            clock_seconds = int(minutes) * 60 + int(seconds)
+                        except:
+                            clock_seconds = 0
+                    else:
+                        try:
+                            clock_seconds = int(clock)
+                        except:
+                            clock_seconds = 0
+                
+                # 获取比分
+                competitors = competition.get('competitors', [])
+                away_score = 0
+                home_score = 0
+                quarter_scores = []
+                
+                if len(competitors) >= 2:
+                    away_competitor = competitors[0]
+                    home_competitor = competitors[1]
+                    
+                    away_score = away_competitor.get('score', '0')
+                    home_score = home_competitor.get('score', '0')
+                    
+                    # 获取每节得分
+                    away_linescores = away_competitor.get('linescores', [])
+                    home_linescores = home_competitor.get('linescores', [])
+                    
+                    # 格式化每节得分
+                    quarter_scores = []
+                    for i in range(min(len(away_linescores), len(home_linescores))):
+                        away_q_score = away_linescores[i].get('value', 0)
+                        home_q_score = home_linescores[i].get('value', 0)
+                        
+                        quarter_num = i + 1
+                        if quarter_num <= 4:
+                            quarter_label = f"第{quarter_num}节"
+                        else:
+                            quarter_label = f"加时{quarter_num-4}"
+                        
+                        quarter_scores.append({
+                            'quarter': quarter_label,
+                            'away_score': away_q_score,
+                            'home_score': home_q_score
+                        })
+                
+                # 生成状态文本
+                if period <= 4:
+                    period_text = f"第{period}节"
+                else:
+                    period_text = f"加时{period-4}"
+                
+                return {
+                    'period': period,
+                    'clock': clock,
+                    'clock_seconds': clock_seconds,
+                    'period_text': period_text,
+                    'quarter_scores': quarter_scores,
+                    'away_score': away_score,
+                    'home_score': home_score
+                }
+    except Exception:
+        pass
+    return None
 
 def fetch_single_player_stats(event_id):
     try:
@@ -260,232 +521,43 @@ def fetch_all_player_stats_parallel(event_ids):
                     player_stats_map[event_id] = data
     return player_stats_map
 
-# ====== 获取比赛节次信息 ======
-def get_game_period_info(event):
-    """从事件数据中提取节次信息"""
+# ====== AJAX端点处理 ======
+def handle_ajax_request():
+    """处理AJAX请求，返回实时比赛数据"""
     try:
-        competitions = event.get('competitions', [{}])
-        if not competitions:
-            return None
+        # 这里应该从请求中获取数据，但Streamlit不支持直接访问请求
+        # 所以我们通过session_state来传递
+        if 'ajax_game_ids' in st.session_state:
+            game_ids = st.session_state.ajax_game_ids
+            live_data = {}
             
-        competition = competitions[0]
-        status = competition.get('status', {})
-        status_type = status.get('type', {})
-        
-        # 获取节次和时钟
-        period = status.get('period', 0)
-        clock = status.get('displayClock', '')
-        
-        # 将时钟转换为秒数
-        clock_seconds = 0
-        if clock and clock != '0:00' and clock != '0':
-            if ':' in clock:
-                try:
-                    minutes, seconds = clock.split(':')
-                    clock_seconds = int(minutes) * 60 + int(seconds)
-                except:
-                    clock_seconds = 0
-            else:
-                try:
-                    clock_seconds = int(clock)
-                except:
-                    clock_seconds = 0
-        
-        # 处理比赛状态文本
-        state = status_type.get('state', 'pre')
-        description = status_type.get('description', '')
-        
-        # 获取比分
-        competitors = competition.get('competitors', [])
-        away_score = 0
-        home_score = 0
-        quarter_scores = []
-        
-        if len(competitors) >= 2:
-            away_competitor = competitors[0]
-            home_competitor = competitors[1]
+            for game_id in game_ids:
+                game_data = fetch_live_game_data(game_id)
+                if game_data:
+                    live_data[game_id] = game_data
             
-            # 获取总分
-            away_score = away_competitor.get('score', '0')
-            home_score = home_competitor.get('score', '0')
-            
-            # 获取每节得分
-            away_linescores = away_competitor.get('linescores', [])
-            home_linescores = home_competitor.get('linescores', [])
-            
-            # 格式化每节得分
-            quarter_scores = []
-            for i in range(min(len(away_linescores), len(home_linescores))):
-                away_q_score = away_linescores[i].get('value', 0)
-                home_q_score = home_linescores[i].get('value', 0)
-                
-                # 处理加时赛显示
-                quarter_num = i + 1
-                if quarter_num <= 4:
-                    quarter_label = f"第{quarter_num}节"
-                else:
-                    quarter_label = f"加时{quarter_num-4}"
-                
-                quarter_scores.append({
-                    'quarter': quarter_label,
-                    'away_score': away_q_score,
-                    'home_score': home_q_score,
-                    'quarter_num': quarter_num
-                })
-        
-        # 生成状态文本
-        if state == 'in':
-            if period <= 4:
-                period_text = f"第{period}节"
-            else:
-                period_text = f"加时{period-4}"
-        elif state == 'post':
-            period_text = "比赛结束"
-        else:
-            period_text = "未开始"
-        
-        return {
-            'period': period,
-            'clock': clock,
-            'clock_seconds': clock_seconds,
-            'period_text': period_text,
-            'quarter_scores': quarter_scores,
-            'state': state,
-            'description': description,
-            'away_score': away_score,
-            'home_score': home_score
-        }
-    except Exception as e:
-        print(f"Error getting period info: {e}")
-        return None
-
-def format_time(t):
-    if not t or str(t).strip() in ('0', '0:00', '--', '', 'DNP', 'N/A'):
-        return '0:00'
-    s = str(t).strip()
-    if ':' in s:
-        return s
-    try:
-        minutes = int(float(s))
-        return f"{minutes}:00"
-    except:
-        return s
-
-def safe_int(value, default=0):
-    if not value:
-        return default
-    try:
-        if '/' in str(value):
-            return int(str(value).split('/')[0])
-        return int(float(str(value)))
-    except:
-        return default
-
-def parse_player_stats(game_data):
-    try:
-        if not game_data or 'boxscore' not in game_data:
-            return [], []
-        players_section = game_data.get('boxscore', {}).get('players', [])
-        if not players_section or len(players_section) < 2:
-            return [], []
-        away_players, home_players = players_section[0], players_section[1]
-
-        def extract_team_data(team_data):
-            if not team_data:
-                return []
-            stats_list = team_data.get('statistics', [])
-            main_stat = None
-            for stat in stats_list:
-                if stat.get('athletes') and ('PTS' in stat.get('labels', []) or '得分' in stat.get('labels', [])):
-                    main_stat = stat
-                    break
-            if not main_stat:
-                return []
-            labels = main_stat.get('labels', [])
-            athletes = main_stat.get('athletes', [])
-            parsed = []
-            for ath in athletes:
-                try:
-                    athlete_data = ath.get('athlete', {})
-                    name_en = (athlete_data.get('displayName') or athlete_data.get('fullName') or 
-                               athlete_data.get('shortName') or ath.get('displayName') or ath.get('name') or '')
-                    name_en = str(name_en).strip()
-                    if not name_en or name_en in ['DNP', 'N/A', '--', 'null', 'None']:
-                        continue
-                    name_cn = translate_player_name(name_en)
-                    raw_vals = ath.get('stats', [])
-                    if not raw_vals:
-                        continue
-                    stat_map = {}
-                    for i, label in enumerate(labels):
-                        if i < len(raw_vals):
-                            val = raw_vals[i]
-                            stat_map[label] = str(val).strip() if val is not None else ''
-                    
-                    def get_stat(k, d='0'): return stat_map.get(k, d)
-                    def get_shot(k, d='0-0'): return get_stat(k, d).replace('/', '-')
-                    fg_part = get_shot('FG', '0-0').split('-')
-                    three_part = get_shot('3PT', '0-0').split('-')
-                    ft_part = get_shot('FT', '0-0').split('-')
-                    player_data = {
-                        '球员': name_cn,
-                        '时间': format_time(get_stat('MIN', '0')),
-                        '得分': get_stat('PTS', '0'),
-                        '投篮': f"{fg_part[0] if len(fg_part)>1 else '0'}/{fg_part[1] if len(fg_part)>1 else '0'}",
-                        '三分': f"{three_part[0] if len(three_part)>1 else '0'}/{three_part[1] if len(three_part)>1 else '0'}",
-                        '罚球': f"{ft_part[0] if len(ft_part)>1 else '0'}/{ft_part[1] if len(ft_part)>1 else '0'}",
-                        '篮板': get_stat('REB', '0'),
-                        '助攻': get_stat('AST', '0'),
-                        '失误': get_stat('TO', '0')
-                    }
-                    if (safe_int(player_data['得分']) > 0 or safe_int(player_data['篮板']) > 0 or 
-                        safe_int(player_data['助攻']) > 0 or player_data['时间'] not in ('0:00', '0')):
-                        parsed.append(player_data)
-                except Exception:
-                    continue
-            return parsed
-        away_data = extract_team_data(away_players)
-        home_data = extract_team_data(home_players)
-        return away_data, home_data
-    except Exception as e:
-        print(f"Error parsing player stats: {e}")
-        return [], []
-
-def display_simple_table(players_data, team_name):
-    if not players_data:
-        st.info("暂无球员数据")
-        return
-    players_data = sorted(players_data, key=lambda x: safe_int(x['得分'], 0), reverse=True)[:10]
-    simple_data = [{'球员': p['球员'], '时间': p['时间'], '得分': p['得分']} for p in players_data]
-    df = pd.DataFrame(simple_data)
-    if not df.empty:
-        st.markdown('<div class="simple-table-container">', unsafe_allow_html=True)
-        st.dataframe(df, hide_index=True, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-def display_full_table(players_data):
-    if not players_data:
-        st.info("暂无球员数据")
-        return
-    df = pd.DataFrame(players_data)
-    if not df.empty:
-        df['得分'] = pd.to_numeric(df['得分'], errors='coerce')
-        df = df.sort_values('得分', ascending=False)
-        df['得分'] = df['得分'].astype(str)
-        st.markdown('<div class="full-table-container">', unsafe_allow_html=True)
-        st.dataframe(df, hide_index=True, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+            return live_data
+    except Exception:
+        pass
+    return {}
 
 # ====== 主界面 ======
 col1, col2 = st.columns([3, 1])
 with col1:
     selected_date = st.date_input(
         "选择日期",
-        value=now_beijing.date(),
+        value=st.session_state.selected_date,
         min_value=now_beijing.date() - timedelta(days=3),
         max_value=now_beijing.date() + timedelta(days=3),
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key='date_selector'
     )
+    
+    # 更新选中的日期
+    if selected_date != st.session_state.selected_date:
+        st.session_state.selected_date = selected_date
+        st.cache_data.clear()
+        st.rerun()
 
 with col2:
     manual_refresh = st.button("🔄 刷新", use_container_width=True, key='manual_refresh_top')
@@ -494,21 +566,10 @@ with col2:
         st.cache_data.clear()
         st.rerun()
 
-# 计算倒计时
-current_time = time.time()
-time_since_last_refresh = current_time - st.session_state.last_refresh_time
-countdown_seconds = max(0, st.session_state.refresh_interval - int(time_since_last_refresh))
-
-# 检查是否需要自动刷新
-if st.session_state.auto_refresh and countdown_seconds <= 0:
-    st.session_state.last_refresh_time = current_time
-    st.cache_data.clear()
-    st.rerun()
-
 st.subheader(f"📅 {selected_date.strftime('%Y年%m月%d日')}")
 
 # 加载主赛程数据
-with st.spinner("快速加载赛程..."):
+with st.spinner("加载赛程数据..."):
     schedule = fetch_nba_schedule(selected_date.strftime('%Y-%m-%d'))
 
 if not schedule or 'events' not in schedule:
@@ -520,7 +581,16 @@ if not events:
     st.info("今日无比赛")
     st.stop()
 
-# 并行加载球员数据
+# 识别进行中的比赛
+live_game_ids = []
+for event in events:
+    status_type = event.get('status', {}).get('type', {})
+    if status_type.get('state', 'pre') == 'in':
+        live_game_ids.append(event['id'])
+
+st.session_state.live_game_ids = live_game_ids
+
+# 并行加载球员数据（只加载进行中和已结束的比赛）
 live_or_post_event_ids = []
 for event in events:
     status_type = event.get('status', {}).get('type', {})
@@ -529,7 +599,7 @@ for event in events:
 
 player_stats_map = {}
 if live_or_post_event_ids:
-    with st.spinner("同步球员数据..."):
+    with st.spinner("加载球员数据..."):
         player_stats_map = fetch_all_player_stats_parallel(live_or_post_event_ids)
 
 # 渲染比赛列表
@@ -543,15 +613,9 @@ for i, event in enumerate(events):
     home_name = translate_team_name(home.get('team', {}).get('displayName', '主队'))
     away_name = translate_team_name(away.get('team', {}).get('displayName', '客队'))
     
-    # 获取节次信息
-    period_info = get_game_period_info(event)
-    if period_info:
-        home_score = period_info['home_score']
-        away_score = period_info['away_score']
-        st.session_state.game_period_info[event['id']] = period_info
-    else:
-        home_score = home.get('score', '0')
-        away_score = away.get('score', '0')
+    # 获取初始比分
+    home_score = home.get('score', '0')
+    away_score = away.get('score', '0')
 
     status_type = event.get('status', {}).get('type', {})
     state = status_type.get('state', 'pre')
@@ -559,6 +623,11 @@ for i, event in enumerate(events):
     
     if state == 'in':
         status_badge, game_class = "🟢 直播中", "live-game"
+        # 获取实时数据
+        live_data = fetch_live_game_data(event['id'])
+        if live_data:
+            home_score = live_data['home_score']
+            away_score = live_data['away_score']
     elif state == 'post':
         status_badge, game_class = "⚫ 已结束", "finished-game"
     else:
@@ -570,127 +639,125 @@ for i, event in enumerate(events):
     except:
         bj_time = "时间待定"
 
-    # 比赛卡片
-    st.markdown(f'<div class="game-card {game_class}">', unsafe_allow_html=True)
+    # 比赛卡片 - 添加data-game-id属性用于JavaScript识别
+    game_card_html = f'<div class="game-card {game_class}" data-game-id="{event["id"]}">'
+    st.markdown(game_card_html, unsafe_allow_html=True)
     
     # 比赛基本信息
     cols = st.columns([2, 1, 2])
     with cols[0]:
         st.markdown(f'<div class="team-name">{away_name}</div>', unsafe_allow_html=True)
-        st.markdown(f'<span style="font-size: 24px; font-weight: bold;">{away_score}</span>', unsafe_allow_html=True)
+        st.markdown(f'<span id="score-away-{event["id"]}" style="font-size: 24px; font-weight: bold;">{away_score}</span>', unsafe_allow_html=True)
     with cols[1]:
         st.markdown("**VS**")
         st.markdown(f'<div class="game-time">{bj_time}</div>', unsafe_allow_html=True)
     with cols[2]:
         st.markdown(f'<div class="team-name">{home_name}</div>', unsafe_allow_html=True)
-        st.markdown(f'<span style="font-size: 24px; font-weight: bold;">{home_score}</span>', unsafe_allow_html=True)
+        st.markdown(f'<span id="score-home-{event["id"]}" style="font-size: 24px; font-weight: bold;">{home_score}</span>', unsafe_allow_html=True)
     
-    # 显示状态信息 - 直接使用markdown而不是HTML注入
-    st.markdown(f"**{status_badge} {desc}**")
-    
-    # 如果是直播中或已结束的比赛，显示节次信息
-    if state in ['in', 'post'] and period_info:
-        if period_info['state'] == 'in':
-            # 直播中：显示节次和倒计时
-            clock_display = ""
-            if period_info['clock'] and period_info['clock'] != '0:00':
-                clock_display = f"⏱️ {period_info['clock']}"
-                
-            st.markdown(f"**🎯 {period_info['period_text']} {clock_display}**")
+    # 显示状态信息
+    if state == 'in':
+        # 直播中：显示节次和倒计时
+        live_data = fetch_live_game_data(event['id'])
+        if live_data:
+            period_text = live_data['period_text']
+            clock = live_data['clock']
+            clock_seconds = live_data['clock_seconds']
             
-            # 显示每节得分 - 使用markdown而不是HTML
-            if period_info['quarter_scores']:
+            # 添加时钟倒计时的隐藏数据存储
+            st.markdown(f'<div id="clock-seconds-{event["id"]}" data-seconds="{clock_seconds}" style="display:none;"></div>', unsafe_allow_html=True)
+            
+            st.markdown(f"**{status_badge} {desc}**")
+            st.markdown(f"**🎯 <span id='period-{event[\"id\"]}'>{period_text}</span> ⏱️ <span id='clock-{event[\"id\"]}'>{clock}</span>**")
+            
+            # 显示每节得分
+            if live_data['quarter_scores']:
                 st.markdown("**每节比分:**")
                 
-                # 创建列来显示节次比分
-                quarter_cols = st.columns(min(4, len(period_info['quarter_scores'])))
+                # 创建容器用于JavaScript更新
+                scores_container = st.empty()
+                with scores_container.container():
+                    cols = st.columns(min(4, len(live_data['quarter_scores'])))
+                    for idx, q in enumerate(live_data['quarter_scores']):
+                        if idx < 4:
+                            col_idx = idx % len(cols)
+                            with cols[col_idx]:
+                                st.markdown(
+                                    f"<div class='quarter-score'>"
+                                    f"<strong>{q['quarter']}</strong><br>"
+                                    f"{q['away_score']}-{q['home_score']}"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
                 
-                for idx, q in enumerate(period_info['quarter_scores']):
-                    if idx < 4:  # 最多显示4列
-                        col_idx = idx % len(quarter_cols)
-                        with quarter_cols[col_idx]:
-                            st.markdown(
-                                f"<div style='background: #f0f2f6; padding: 4px 8px; border-radius: 10px; "
-                                f"font-size: 11px; margin: 2px;'>"
-                                f"**{q['quarter']}**<br>"
-                                f"{q['away_score']}-{q['home_score']}"
-                                f"</div>",
-                                unsafe_allow_html=True
-                            )
+                # 添加用于JavaScript更新的容器
+                st.markdown(f'<div id="scores-{event["id"]}" style="display:none;"></div>', unsafe_allow_html=True)
                 
                 st.markdown(f"**当前总分: {away_name} {away_score}-{home_score} {home_name}**")
-        
-        elif period_info['state'] == 'post':
-            # 已结束：显示最终节次信息
-            st.markdown(f"**🏁 {period_info['period_text']}**")
             
-            # 显示所有节次得分
-            if period_info['quarter_scores']:
-                st.markdown("**全场比分:**")
-                
-                # 创建列来显示节次比分
-                quarter_cols = st.columns(min(4, len(period_info['quarter_scores'])))
-                
-                for idx, q in enumerate(period_info['quarter_scores']):
-                    if idx < 8:  # 最多显示8节（4节+4个加时）
-                        col_idx = idx % len(quarter_cols)
-                        with quarter_cols[col_idx]:
-                            st.markdown(
-                                f"<div style='background: #f0f2f6; padding: 4px 8px; border-radius: 10px; "
-                                f"font-size: 11px; margin: 2px;'>"
-                                f"**{q['quarter']}**<br>"
-                                f"{q['away_score']}-{q['home_score']}"
-                                f"</div>",
-                                unsafe_allow_html=True
-                            )
-                
-                st.markdown(f"**总比分: {away_name} {away_score}-{home_score} {home_name}**")
+            # 添加AJAX加载指示器
+            st.markdown(f'<div id="loading-{event["id"]}" class="ajax-loading" style="display:none;"></div>', unsafe_allow_html=True)
+        
+    elif state == 'post':
+        # 已结束：显示最终信息
+        st.markdown(f"**{status_badge} {desc}**")
+        game_data = player_stats_map.get(event['id'])
+        if game_data:
+            # 显示节次比分
+            competitions = game_data.get('header', {}).get('competitions', [{}])
+            if competitions:
+                competition = competitions[0]
+                competitors = competition.get('competitors', [])
+                if len(competitors) >= 2:
+                    away_linescores = competitors[0].get('linescores', [])
+                    home_linescores = competitors[1].get('linescores', [])
+                    
+                    if away_linescores and home_linescores:
+                        st.markdown("**全场比分:**")
+                        quarter_cols = st.columns(min(4, len(away_linescores)))
+                        
+                        for idx in range(len(away_linescores)):
+                            quarter_num = idx + 1
+                            if quarter_num <= 4:
+                                quarter_label = f"第{quarter_num}节"
+                            else:
+                                quarter_label = f"加时{quarter_num-4}"
+                            
+                            col_idx = idx % len(quarter_cols)
+                            with quarter_cols[col_idx]:
+                                st.markdown(
+                                    f"<div class='quarter-score'>"
+                                    f"<strong>{quarter_label}</strong><br>"
+                                    f"{away_linescores[idx].get('value', 0)}-{home_linescores[idx].get('value', 0)}"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
+    else:
+        # 未开始
+        st.markdown(f"**{status_badge} {desc}**")
     
-    # 球员数据
+    # 球员数据（只在初始加载时渲染，不通过AJAX更新）
     if state in ['in', 'post']:
         game_data = player_stats_map.get(event['id'])
         if game_data:
-            away_p, home_p = parse_player_stats(game_data)
-            if away_p or home_p:
-                game_key = f"game_{event['id']}"
-                if game_key not in st.session_state.expanded_games:
-                    st.session_state.expanded_games[game_key] = {'away_expanded': False, 'home_expanded': False}
-                
-                st.markdown("---")
-                st.markdown("**球员数据**")
-                tab1, tab2 = st.tabs([f"👤 {away_name}", f"👤 {home_name}"])
-                
-                with tab1:
-                    if away_p:
-                        st.markdown(f"**{away_name}**")
-                        display_simple_table(away_p, away_name)
-                        col_btn1, _ = st.columns([1, 1])
-                        with col_btn1:
-                            if st.button("📊 详细数据", key=f"expand_away_{event['id']}", 
-                                      use_container_width=True, 
-                                      type="secondary" if not st.session_state.expanded_games[game_key]['away_expanded'] else "primary"):
-                                st.session_state.expanded_games[game_key]['away_expanded'] = not st.session_state.expanded_games[game_key]['away_expanded']
-                        if st.session_state.expanded_games[game_key]['away_expanded']:
-                            st.markdown("**详细数据**")
-                            display_full_table(away_p)
-                    else:
-                        st.info("暂无球员数据")
-                
-                with tab2:
-                    if home_p:
-                        st.markdown(f"**{home_name}**")
-                        display_simple_table(home_p, home_name)
-                        col_btn1, _ = st.columns([1, 1])
-                        with col_btn1:
-                            if st.button("📊 详细数据", key=f"expand_home_{event['id']}", 
-                                      use_container_width=True, 
-                                      type="secondary" if not st.session_state.expanded_games[game_key]['home_expanded'] else "primary"):
-                                st.session_state.expanded_games[game_key]['home_expanded'] = not st.session_state.expanded_games[game_key]['home_expanded']
-                        if st.session_state.expanded_games[game_key]['home_expanded']:
-                            st.markdown("**详细数据**")
-                            display_full_table(home_p)
-                    else:
-                        st.info("暂无球员数据")
+            # 简化球员数据显示
+            st.markdown("---")
+            st.markdown("**球员数据**")
+            
+            # 使用session_state管理展开状态
+            game_key = f"game_{event['id']}"
+            if game_key not in st.session_state.expanded_games:
+                st.session_state.expanded_games[game_key] = False
+            
+            # 只显示简要数据，详细数据通过按钮展开
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button(f"👤 {away_name} 球员", key=f"away_{event['id']}", use_container_width=True):
+                    st.session_state.expanded_games[game_key] = not st.session_state.expanded_games[game_key]
+            
+            with col2:
+                if st.button(f"👤 {home_name} 球员", key=f"home_{event['id']}", use_container_width=True):
+                    st.session_state.expanded_games[game_key] = not st.session_state.expanded_games[game_key]
     
     st.markdown('</div>', unsafe_allow_html=True)
     
@@ -710,6 +777,10 @@ with col1:
         help="开启后页面会自动定期刷新",
         key='auto_refresh_toggle'
     )
+    
+    # 添加HTML元素供JavaScript读取
+    st.markdown(f'<input type="checkbox" id="auto-refresh-toggle" {"checked" if st.session_state.auto_refresh else ""} style="display:none;">', unsafe_allow_html=True)
+
 with col2:
     interval_options = [10, 30, 60, 120]
     refresh_interval = st.selectbox(
@@ -719,19 +790,22 @@ with col2:
         help="设置自动刷新的时间间隔",
         key='refresh_interval_select'
     )
+    
+    # 添加HTML元素供JavaScript读取
+    st.markdown(f'<select id="refresh-interval-select" style="display:none;"><option value="{refresh_interval}">{refresh_interval}</option></select>', unsafe_allow_html=True)
+
 with col3:
     # 更新session state
     if st.session_state.auto_refresh != auto_refresh:
         st.session_state.auto_refresh = auto_refresh
     if st.session_state.refresh_interval != refresh_interval:
         st.session_state.refresh_interval = refresh_interval
-        st.session_state.last_refresh_time = current_time
+        st.session_state.last_refresh_time = time.time()
     
     # 显示状态和动态倒计时
     if st.session_state.auto_refresh:
         status_text = f"状态: <span class='auto-refresh-on'>开启</span>"
-        # 使用JavaScript实现动态倒计时
-        countdown_text = f"倒计时: <span class='countdown pulse-animation' id='refresh-countdown' data-seconds='{countdown_seconds}'>{countdown_seconds}秒</span>"
+        countdown_text = f"倒计时: <span class='countdown' id='refresh-countdown'>{st.session_state.refresh_interval}秒</span>"
     else:
         status_text = "状态: <span class='auto-refresh-off'>关闭</span>"
         countdown_text = "倒计时: --"
@@ -739,27 +813,56 @@ with col3:
     st.markdown(status_text, unsafe_allow_html=True)
     st.markdown(countdown_text, unsafe_allow_html=True)
 
-# 手动刷新按钮（底部）
-if st.button("🔄 立即手动刷新", use_container_width=True, type="primary", key='manual_refresh_bottom'):
-    st.session_state.last_refresh_time = time.time()
-    st.cache_data.clear()
-    st.rerun()
+# 手动刷新按钮（底部）- 现在只触发局部刷新
+if st.button("🔄 立即手动刷新进行中比赛", use_container_width=True, type="primary", key='manual_refresh_bottom'):
+    # 将游戏ID存储到session state供JavaScript使用
+    st.session_state.ajax_game_ids = st.session_state.live_game_ids
+    # 显示刷新提示
+    st.toast("正在刷新进行中的比赛...", icon="🔄")
 
 st.markdown('</div>', unsafe_allow_html=True)
-
-# ====== 自动刷新机制 ======
-if st.session_state.auto_refresh:
-    refresh_seconds = st.session_state.refresh_interval + 1
-    # 使用Streamlit的自动刷新功能
-    st.markdown(f"""
-    <meta http-equiv="refresh" content="{refresh_seconds}">
-    """, unsafe_allow_html=True)
 
 # 页脚信息
 st.divider()
 footer_cols = st.columns([3, 1])
 with footer_cols[0]:
-    st.caption(f"最后更新: {datetime.now(beijing_tz).strftime('%H:%M:%S')} | 刷新间隔: {st.session_state.refresh_interval}秒")
+    st.caption(f"最后更新: {datetime.now(beijing_tz).strftime('%H:%M:%S')} | 刷新间隔: {st.session_state.refresh_interval}秒 | 进行中比赛: {len(live_game_ids)}场")
 with footer_cols[1]:
     if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
         st.rerun()
+
+# 添加JavaScript初始化代码
+st.markdown("""
+<script>
+// 页面加载完成后初始化局部刷新
+window.addEventListener('load', function() {
+    // 延迟执行以确保所有元素都已加载
+    setTimeout(function() {
+        // 初始化时钟显示
+        const clockElements = document.querySelectorAll('[id^="clock-"]');
+        clockElements.forEach(clockEl => {
+            const gameId = clockEl.id.replace('clock-', '');
+            const secondsEl = document.getElementById('clock-seconds-' + gameId);
+            if (secondsEl) {
+                let seconds = parseInt(secondsEl.getAttribute('data-seconds'));
+                const minutes = Math.floor(seconds / 60);
+                const secs = seconds % 60;
+                clockEl.textContent = `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+            }
+        });
+        
+        // 如果有进行中的比赛，开始定时刷新
+        const liveGames = document.querySelectorAll('.live-game[data-game-id]');
+        if (liveGames.length > 0) {
+            // 每10秒刷新一次进行中的比赛
+            setInterval(function() {
+                refreshLiveGames();
+            }, 10000);
+            
+            // 初始刷新
+            setTimeout(refreshLiveGames, 2000);
+        }
+    }, 1500);
+});
+</script>
+""", unsafe_allow_html=True)

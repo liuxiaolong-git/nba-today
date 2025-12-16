@@ -90,7 +90,7 @@ if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = True
     
 if 'refresh_interval' not in st.session_state:
-    st.session_state.refresh_interval = 300
+    st.session_state.refresh_interval = 30
     
 if 'last_refresh_time' not in st.session_state:
     st.session_state.last_refresh_time = time.time()
@@ -668,7 +668,7 @@ with col1:
         key='auto_refresh_toggle'
     )
 with col2:
-    interval_options = [10, 30, 60, 120]
+    interval_options = [100, 300, 600, 1200]
     refresh_interval = st.selectbox(
         "刷新间隔(秒)",
         options=interval_options,
@@ -720,4 +720,5 @@ with footer_cols[0]:
 with footer_cols[1]:
     if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
         st.rerun()
+
 

@@ -264,10 +264,11 @@ def get_game_period_info(event):
         quarter_scores = []
         
         if len(competitors) >= 2:
+            # 修正：第一个是客场队伍，第二个是主场队伍
             away_competitor = competitors[0]
             home_competitor = competitors[1]
             
-            # 获取总分
+            # 获取总分 - 修正这里，确保away_score对应客场队伍，home_score对应主场队伍
             away_score = away_competitor.get('score', '0')
             home_score = home_competitor.get('score', '0')
             
@@ -490,19 +491,22 @@ for i, event in enumerate(events):
     if len(competitors) < 2:
         continue
 
-    home, away = competitors[0], competitors[1]
-    home_name = translate_team_name(home.get('team', {}).get('displayName', '主队'))
+    # 修正：第一个是客场队伍，第二个是主场队伍
+    away, home = competitors[0], competitors[1]
     away_name = translate_team_name(away.get('team', {}).get('displayName', '客队'))
+    home_name = translate_team_name(home.get('team', {}).get('displayName', '主队'))
     
     # 获取节次信息
     period_info = get_game_period_info(event)
     if period_info:
-        home_score = period_info['home_score']
+        # 这里已经修正了，away_score对应客场队伍，home_score对应主场队伍
         away_score = period_info['away_score']
+        home_score = period_info['home_score']
         st.session_state.game_period_info[event['id']] = period_info
     else:
-        home_score = home.get('score', '0')
+        # 如果无法获取节次信息，直接从数据获取比分
         away_score = away.get('score', '0')
+        home_score = home.get('score', '0')
 
     status_type = event.get('status', {}).get('type', {})
     state = status_type.get('state', 'pre')
@@ -525,7 +529,7 @@ for i, event in enumerate(events):
     game_id = event['id']
     st.markdown(f'<div class="game-card {game_class}" id="game-{game_id}">', unsafe_allow_html=True)
     
-    # 比赛基本信息
+    # 比赛基本信息 - 客场队伍在左，主场队伍在右
     cols = st.columns([2, 1, 2])
     with cols[0]:
         st.markdown(f'<div class="team-name">{away_name}</div>', unsafe_allow_html=True)
@@ -538,12 +542,7 @@ for i, event in enumerate(events):
         st.markdown(f'<span style="font-size: 24px; font-weight: bold;">{home_score}</span>', unsafe_allow_html=True)
     
     # 显示状态信息
-    if state == 'in':
-        st.markdown(f"**{status_badge} {desc}**")
-    elif state == 'post':
-        st.markdown(f"**{status_badge} {desc}**")
-    else:
-        st.markdown(f"**{status_badge} {desc}**")
+    st.markdown(f"**{status_badge} {desc}**")
     
     # 初始化折叠状态
     if game_id not in st.session_state.game_collapsed:

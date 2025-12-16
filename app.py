@@ -67,6 +67,13 @@ st.markdown("""
         animation: pulse 1s infinite;
         display: inline-block;
     }
+    .status-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        margin-right: 8px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -91,6 +98,9 @@ if 'expanded_games' not in st.session_state:
 if 'game_period_info' not in st.session_state:
     st.session_state.game_period_info = {}
 
+if 'countdown_times' not in st.session_state:
+    st.session_state.countdown_times = {}
+
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
 
@@ -99,15 +109,22 @@ st.markdown("""
 <script>
 // 动态更新倒计时
 function updateCountdown() {
-    const countdownElements = document.querySelectorAll('.countdown-timer');
+    // 更新比赛时钟倒计时
+    const countdownElements = document.querySelectorAll('[id^="game-clock-"]');
     countdownElements.forEach(el => {
-        let seconds = parseInt(el.getAttribute('data-seconds'));
-        if (seconds > 0) {
-            seconds--;
-            el.setAttribute('data-seconds', seconds);
-            const minutes = Math.floor(seconds / 60);
-            const secs = seconds % 60;
-            el.textContent = `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+        const gameId = el.id.replace('game-clock-', '');
+        const secondsEl = document.getElementById('game-clock-seconds-' + gameId);
+        if (secondsEl) {
+            let seconds = parseInt(secondsEl.getAttribute('data-seconds'));
+            if (seconds > 0) {
+                seconds--;
+                secondsEl.setAttribute('data-seconds', seconds);
+                const minutes = Math.floor(seconds / 60);
+                const secs = seconds % 60;
+                el.textContent = `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+            } else if (seconds === 0) {
+                el.textContent = "0:00";
+            }
         }
     });
     
@@ -119,6 +136,14 @@ function updateCountdown() {
             refreshSeconds--;
             refreshCountdownEl.setAttribute('data-seconds', refreshSeconds);
             refreshCountdownEl.textContent = `${refreshSeconds}秒`;
+            if (refreshSeconds <= 5) {
+                refreshCountdownEl.classList.add('pulse-animation');
+            } else {
+                refreshCountdownEl.classList.remove('pulse-animation');
+            }
+        } else if (refreshSeconds <= 0) {
+            // 自动刷新
+            window.location.reload();
         }
     }
 }
@@ -127,7 +152,21 @@ function updateCountdown() {
 setInterval(updateCountdown, 1000);
 
 // 初始化
-document.addEventListener('DOMContentLoaded', updateCountdown);
+document.addEventListener('DOMContentLoaded', function() {
+    updateCountdown();
+    // 初始化时钟显示
+    const clockElements = document.querySelectorAll('[id^="game-clock-"]');
+    clockElements.forEach(el => {
+        const gameId = el.id.replace('game-clock-', '');
+        const secondsEl = document.getElementById('game-clock-seconds-' + gameId);
+        if (secondsEl) {
+            let seconds = parseInt(secondsEl.getAttribute('data-seconds'));
+            const minutes = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            el.textContent = `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+        }
+    });
+});
 </script>
 """, unsafe_allow_html=True)
 
@@ -205,74 +244,94 @@ def fetch_all_player_stats_parallel(event_ids):
     return player_stats_map
 
 # ====== 获取比赛节次信息 ======
-def get_game_period_info(game_data, event_id):
-    """从比赛数据中提取节次信息"""
+def get_game_period_info(event):
+    """从事件数据中提取节次信息"""
     try:
-        header = game_data.get('header', {})
-        competitions = header.get('competitions', [{}])
-        if competitions:
-            competition = competitions[0]
-            status = competition.get('status', {})
+        competitions = event.get('competitions', [{}])
+        if not competitions:
+            return None
             
-            # 获取节次信息
-            period = status.get('period', 0)
-            clock = status.get('displayClock', '')
+        competition = competitions[0]
+        status = competition.get('status', {})
+        status_type = status.get('type', {})
+        
+        # 获取节次和时钟
+        period = status.get('period', 0)
+        clock = status.get('displayClock', '')
+        
+        # 将时钟转换为秒数
+        clock_seconds = 0
+        if clock and clock != '0:00' and clock != '0':
+            if ':' in clock:
+                try:
+                    minutes, seconds = clock.split(':')
+                    clock_seconds = int(minutes) * 60 + int(seconds)
+                except:
+                    clock_seconds = 0
+            else:
+                try:
+                    clock_seconds = int(clock)
+                except:
+                    clock_seconds = 0
+        
+        # 处理比赛状态文本
+        state = status_type.get('state', 'pre')
+        description = status_type.get('description', '')
+        
+        # 获取比分
+        competitors = competition.get('competitors', [])
+        away_score = 0
+        home_score = 0
+        quarter_scores = []
+        
+        if len(competitors) >= 2:
+            away_competitor = competitors[0]
+            home_competitor = competitors[1]
+            
+            # 获取总分
+            away_score = away_competitor.get('score', '0')
+            home_score = home_competitor.get('score', '0')
             
             # 获取每节得分
-            competitors = competition.get('competitors', [])
+            away_linescores = away_competitor.get('linescores', [])
+            home_linescores = home_competitor.get('linescores', [])
+            
+            # 格式化每节得分
             quarter_scores = []
-            
-            if len(competitors) >= 2:
-                away_competitor = competitors[0]
-                home_competitor = competitors[1]
-                
-                away_linescores = away_competitor.get('linescores', [])
-                home_linescores = home_competitor.get('linescores', [])
-                
-                # 格式化每节得分
-                quarter_scores = []
-                for i in range(min(len(away_linescores), len(home_linescores))):
-                    away_score = away_linescores[i].get('value', 0)
-                    home_score = home_linescores[i].get('value', 0)
-                    quarter_scores.append({
-                        'quarter': i + 1,
-                        'away_score': away_score,
-                        'home_score': home_score,
-                        'total_away': sum([away_linescores[j].get('value', 0) for j in range(i+1)]),
-                        'total_home': sum([home_linescores[j].get('value', 0) for j in range(i+1)])
-                    })
-            
-            # 处理比赛状态文本
-            state = status.get('type', {}).get('state', 'pre')
-            period_text = ""
-            
-            if state == 'in':
-                if period <= 4:
-                    period_text = f"第{period}节"
-                else:
-                    period_text = f"加时{period-4}"
-            elif state == 'post':
-                period_text = "比赛结束"
+            for i in range(min(len(away_linescores), len(home_linescores))):
+                away_q_score = away_linescores[i].get('value', 0)
+                home_q_score = home_linescores[i].get('value', 0)
+                quarter_scores.append({
+                    'quarter': i + 1,
+                    'away_score': away_q_score,
+                    'home_score': home_q_score
+                })
+        
+        # 生成状态文本
+        if state == 'in':
+            if period <= 4:
+                period_text = f"第{period}节"
             else:
-                period_text = "未开始"
-            
-            return {
-                'period': period,
-                'clock': clock,
-                'period_text': period_text,
-                'quarter_scores': quarter_scores,
-                'state': state
-            }
-    except Exception:
-        pass
-    
-    return {
-        'period': 0,
-        'clock': '',
-        'period_text': '',
-        'quarter_scores': [],
-        'state': 'pre'
-    }
+                period_text = f"加时{period-4}"
+        elif state == 'post':
+            period_text = "比赛结束"
+        else:
+            period_text = "未开始"
+        
+        return {
+            'period': period,
+            'clock': clock,
+            'clock_seconds': clock_seconds,
+            'period_text': period_text,
+            'quarter_scores': quarter_scores,
+            'state': state,
+            'description': description,
+            'away_score': away_score,
+            'home_score': home_score
+        }
+    except Exception as e:
+        print(f"Error getting period info: {e}")
+        return None
 
 def format_time(t):
     if not t or str(t).strip() in ('0', '0:00', '--', '', 'DNP', 'N/A'):
@@ -362,7 +421,8 @@ def parse_player_stats(game_data):
         away_data = extract_team_data(away_players)
         home_data = extract_team_data(home_players)
         return away_data, home_data
-    except Exception:
+    except Exception as e:
+        print(f"Error parsing player stats: {e}")
         return [], []
 
 def display_simple_table(players_data, team_name):
@@ -456,8 +516,16 @@ for i, event in enumerate(events):
     home, away = competitors[0], competitors[1]
     home_name = translate_team_name(home.get('team', {}).get('displayName', '主队'))
     away_name = translate_team_name(away.get('team', {}).get('displayName', '客队'))
-    home_score = home.get('score', '0')
-    away_score = away.get('score', '0')
+    
+    # 获取节次信息
+    period_info = get_game_period_info(event)
+    if period_info:
+        home_score = period_info['home_score']
+        away_score = period_info['away_score']
+        st.session_state.game_period_info[event['id']] = period_info
+    else:
+        home_score = home.get('score', '0')
+        away_score = away.get('score', '0')
 
     status_type = event.get('status', {}).get('type', {})
     state = status_type.get('state', 'pre')
@@ -483,63 +551,58 @@ for i, event in enumerate(events):
     cols = st.columns([2, 1, 2])
     with cols[0]:
         st.markdown(f'<div class="team-name">{away_name}</div>', unsafe_allow_html=True)
-        st.markdown(f'**{away_score}**')
+        st.markdown(f'<span style="font-size: 24px; font-weight: bold;">{away_score}</span>', unsafe_allow_html=True)
     with cols[1]:
         st.markdown("**VS**")
         st.markdown(f'<div class="game-time">{bj_time}</div>', unsafe_allow_html=True)
     with cols[2]:
         st.markdown(f'<div class="team-name">{home_name}</div>', unsafe_allow_html=True)
-        st.markdown(f'**{home_score}**')
+        st.markdown(f'<span style="font-size: 24px; font-weight: bold;">{home_score}</span>', unsafe_allow_html=True)
     
     # 显示状态信息
     status_display = f'<span class="status-badge">{status_badge}</span> {desc}'
     
     # 如果是直播中或已结束的比赛，显示节次信息
-    if state in ['in', 'post']:
-        game_data = player_stats_map.get(event['id'])
-        if game_data:
-            period_info = get_game_period_info(game_data, event['id'])
-            st.session_state.game_period_info[event['id']] = period_info
+    if state in ['in', 'post'] and period_info:
+        if period_info['state'] == 'in':
+            # 直播中：显示节次和倒计时
+            clock_display = ''
+            if period_info['clock'] and period_info['clock'] != '0:00':
+                clock_display = f'<span class="countdown" id="game-clock-{event["id"]}"></span>'
+                # 添加隐藏的秒数存储
+                st.markdown(f'<div id="game-clock-seconds-{event["id"]}" data-seconds="{period_info["clock_seconds"]}" style="display:none;"></div>', unsafe_allow_html=True)
             
-            if period_info['state'] == 'in':
-                # 直播中：显示节次和倒计时
-                clock_display = f'<span class="countdown-timer" data-seconds="{period_info.get("clock_seconds", 0)}">{period_info["clock"]}</span>' if period_info['clock'] else ''
-                status_display += f'<br><div class="period-info">🎯 {period_info["period_text"]} {clock_display}</div>'
-                
-                # 显示每节得分
-                if period_info['quarter_scores']:
-                    scores_html = '<div style="margin-top: 8px;"><strong>每节比分:</strong><br>'
-                    for q in period_info['quarter_scores']:
-                        scores_html += f'''
-                        <span class="score-quarter">
-                            第{q["quarter"]}节: {away_name} {q["away_score"]}-{q["home_score"]} {home_name}
-                        </span>
-                        '''
-                    scores_html += '</div>'
-                    status_display += scores_html
+            status_display += f'<br><div class="period-info">🎯 {period_info["period_text"]} {clock_display}</div>'
             
-            elif period_info['state'] == 'post':
-                # 已结束：显示最终节次信息
-                status_display += f'<br><div class="period-info">🏁 {period_info["period_text"]}</div>'
-                
-                # 显示所有节次得分
-                if period_info['quarter_scores']:
-                    scores_html = '<div style="margin-top: 8px;"><strong>全场比分:</strong><br>'
-                    total_away = 0
-                    total_home = 0
-                    
-                    for q in period_info['quarter_scores']:
-                        scores_html += f'''
-                        <span class="score-quarter">
-                            第{q["quarter"]}节: {away_name} {q["away_score"]}-{q["home_score"]} {home_name}
-                        </span>
-                        '''
-                        total_away = q['total_away']
-                        total_home = q['total_home']
-                    
-                    scores_html += f'<br><strong>总比分: {away_name} {total_away}-{total_home} {home_name}</strong>'
-                    scores_html += '</div>'
-                    status_display += scores_html
+            # 显示每节得分
+            if period_info['quarter_scores']:
+                scores_html = '<div style="margin-top: 8px;"><strong>每节比分:</strong><br>'
+                for q in period_info['quarter_scores']:
+                    scores_html += f'''
+                    <span class="score-quarter">
+                        第{q["quarter"]}节: {away_name} {q["away_score"]}-{q["home_score"]} {home_name}
+                    </span>
+                    '''
+                scores_html += f'<br>当前总分: {away_name} {away_score}-{home_score} {home_name}'
+                scores_html += '</div>'
+                status_display += scores_html
+        
+        elif period_info['state'] == 'post':
+            # 已结束：显示最终节次信息
+            status_display += f'<br><div class="period-info">🏁 {period_info["period_text"]}</div>'
+            
+            # 显示所有节次得分
+            if period_info['quarter_scores']:
+                scores_html = '<div style="margin-top: 8px;"><strong>全场比分:</strong><br>'
+                for q in period_info['quarter_scores']:
+                    scores_html += f'''
+                    <span class="score-quarter">
+                        第{q["quarter"]}节: {away_name} {q["away_score"]}-{q["home_score"]} {home_name}
+                    </span>
+                    '''
+                scores_html += f'<br><strong>总比分: {away_name} {away_score}-{home_score} {home_name}</strong>'
+                scores_html += '</div>'
+                status_display += scores_html
     
     st.markdown(status_display, unsafe_allow_html=True)
     

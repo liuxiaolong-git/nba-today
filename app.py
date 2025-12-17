@@ -5,16 +5,17 @@ import pytz
 from datetime import datetime, timedelta
 import time
 import concurrent.futures
+import asyncio
 
 # 移动端优化配置
 st.set_page_config(
-    page_title="NBA赛程查询(菲同学)", 
+    page_title="NBA实时赛程查询(菲同学)", 
     page_icon="🏀", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# 移动端优化的CSS
+# 移动端优化的CSS - 添加实时刷新样式
 st.markdown("""
 <style>
     /* 通用样式 */
@@ -25,11 +26,24 @@ st.markdown("""
         margin: 8px 0;
         border: 1px solid #e0e0e0; 
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        transition: all 0.3s ease;
     }
     
-    .live-game { border-left: 4px solid #4CAF50 !important; }
+    .live-game { 
+        border-left: 4px solid #4CAF50 !important; 
+        background: linear-gradient(135deg, #f8fff8 0%, #ffffff 100%) !important;
+        border: 1px solid #4CAF50 !important;
+        animation: pulse 2s infinite;
+    }
+    
     .finished-game { border-left: 4px solid #9E9E9E !important; }
     .upcoming-game { border-left: 4px solid #2196F3 !important; }
+    
+    @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.3); }
+        70% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+    }
     
     .team-name {
         font-size: 16px; 
@@ -44,6 +58,56 @@ st.markdown("""
         font-size: 14px;
         color: #666;
         margin: 5px 0;
+    }
+    
+    /* 实时刷新指示器 */
+    .live-indicator {
+        display: inline-flex;
+        align-items: center;
+        background: #ff4444;
+        color: white;
+        padding: 3px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: bold;
+        margin-left: 5px;
+        animation: blink 1.5s infinite;
+    }
+    
+    @keyframes blink {
+        0%, 50% { opacity: 1; }
+        51%, 100% { opacity: 0.5; }
+    }
+    
+    .live-indicator::before {
+        content: "●";
+        margin-right: 3px;
+        font-size: 8px;
+    }
+    
+    /* 比赛状态标签 */
+    .status-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        margin: 2px;
+    }
+    
+    .status-live {
+        background: #4CAF50;
+        color: white;
+    }
+    
+    .status-final {
+        background: #757575;
+        color: white;
+    }
+    
+    .status-upcoming {
+        background: #2196F3;
+        color: white;
     }
     
     /* 折叠按钮样式 */
@@ -61,10 +125,24 @@ st.markdown("""
         align-items: center;
         justify-content: center;
         gap: 8px;
+        transition: all 0.3s ease;
     }
     
     .toggle-button:hover {
         opacity: 0.9;
+        transform: translateY(-2px);
+    }
+    
+    /* 时钟样式 */
+    .game-clock {
+        font-size: 18px;
+        font-weight: bold;
+        color: #ff4444;
+        padding: 3px 8px;
+        background: #fff3f3;
+        border-radius: 6px;
+        display: inline-block;
+        margin: 5px 0;
     }
     
     .quarter-container {
@@ -81,6 +159,26 @@ st.markdown("""
         font-size: 14px;
         text-align: center;
         min-width: 80px;
+        transition: all 0.3s ease;
+    }
+    
+    .quarter-box.current {
+        background: #e3f2fd;
+        border: 2px solid #2196F3;
+        font-weight: bold;
+    }
+    
+    /* 自动刷新提示 */
+    .auto-refresh-notice {
+        background: #e8f5e9;
+        padding: 8px 12px;
+        border-radius: 6px;
+        border-left: 4px solid #4CAF50;
+        margin: 10px 0;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
     }
     
     /* 移动端优化 */
@@ -123,6 +221,27 @@ st.markdown("""
         h2, h3 {
             font-size: 16px !important;
         }
+        
+        .game-clock {
+            font-size: 14px;
+            padding: 2px 6px;
+        }
+        
+        .live-indicator {
+            font-size: 9px;
+            padding: 2px 6px;
+        }
+    }
+    
+    /* 分数变化动画 */
+    .score-change {
+        animation: scoreHighlight 1s ease-in-out;
+    }
+    
+    @keyframes scoreHighlight {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.2); background-color: #fff9c4; }
+        100% { transform: scale(1); }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -145,6 +264,21 @@ if 'game_collapsed' not in st.session_state:
 
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = time.time()
+
+# 添加直播游戏ID存储
+if 'live_game_ids' not in st.session_state:
+    st.session_state.live_game_ids = set()
+
+# 添加分数缓存用于检测变化
+if 'score_cache' not in st.session_state:
+    st.session_state.score_cache = {}
+
+# 添加自动刷新设置
+if 'auto_refresh' not in st.session_state:
+    st.session_state.auto_refresh = True
+
+if 'refresh_interval' not in st.session_state:
+    st.session_state.refresh_interval = 30  # 默认30秒刷新
 
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
@@ -185,7 +319,7 @@ def translate_player_name(name):
     return name
 
 # ====== API 数据获取函数 ======
-@st.cache_data(ttl=30, show_spinner=False)  # 缓存30秒
+@st.cache_data(ttl=15, show_spinner=False)  # 缩短缓存时间到15秒，加快直播更新
 def fetch_nba_schedule(date_str):
     try:
         eastern = pytz.timezone('America/New_York')
@@ -198,6 +332,18 @@ def fetch_nba_schedule(date_str):
         return resp.json()
     except Exception:
         return None
+
+# 直播比赛专用函数，缓存时间更短
+@st.cache_data(ttl=10, show_spinner=False)  # 直播比赛10秒缓存
+def fetch_live_game_data(event_id):
+    try:
+        url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
+        resp = requests.get(url, params={'event': event_id}, timeout=3)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return None
 
 def fetch_single_player_stats(event_id):
     try:
@@ -268,7 +414,7 @@ def get_game_period_info(event):
             away_competitor = competitors[0]
             home_competitor = competitors[1]
             
-            # 获取总分 - 修正这里，确保away_score对应客场队伍，home_score对应主场队伍
+            # 获取总分
             away_score = away_competitor.get('score', '0')
             home_score = home_competitor.get('score', '0')
             
@@ -321,6 +467,29 @@ def get_game_period_info(event):
     except Exception as e:
         return None
 
+# ====== 自动刷新逻辑 ======
+def check_score_changes(event_id, away_score, home_score):
+    """检查分数是否发生变化，用于动画效果"""
+    cache_key = f"{event_id}_scores"
+    old_scores = st.session_state.score_cache.get(cache_key, {'away': 0, 'home': 0})
+    
+    try:
+        away_int = int(away_score) if away_score else 0
+        home_int = int(home_score) if home_score else 0
+    except:
+        away_int = 0
+        home_int = 0
+    
+    changed = False
+    if old_scores['away'] != away_int or old_scores['home'] != home_int:
+        changed = True
+    
+    # 更新缓存
+    st.session_state.score_cache[cache_key] = {'away': away_int, 'home': home_int}
+    
+    return changed
+
+# ====== 显示函数 ======
 def format_time(t):
     if not t or str(t).strip() in ('0', '0:00', '--', '', 'DNP', 'N/A'):
         return '0:00'
@@ -439,8 +608,8 @@ def display_full_table(players_data):
 
 # ====== 主界面 ======
 
-# 顶部手动刷新按钮和日期选择器
-col1, col2 = st.columns([3, 1])
+# 顶部控制栏
+col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
 with col1:
     selected_date = st.date_input(
         "选择日期",
@@ -451,11 +620,48 @@ with col1:
     )
 
 with col2:
+    # 自动刷新开关
+    auto_refresh = st.checkbox("自动刷新", value=st.session_state.auto_refresh, key='auto_refresh_checkbox')
+
+with col3:
+    # 刷新间隔选择
+    refresh_interval = st.selectbox(
+        "刷新间隔",
+        options=[10, 15, 30, 60],
+        index=2,
+        key='refresh_interval_select',
+        label_visibility="collapsed"
+    )
+
+with col4:
     manual_refresh = st.button("🔄 刷新数据", use_container_width=True, key='manual_refresh_top', type="primary")
     if manual_refresh:
         st.session_state.last_refresh = time.time()
         st.cache_data.clear()
         st.rerun()
+
+# 更新session状态
+st.session_state.auto_refresh = auto_refresh
+st.session_state.refresh_interval = refresh_interval
+
+# 显示自动刷新状态
+if auto_refresh:
+    last_refresh_time = datetime.fromtimestamp(st.session_state.last_refresh).strftime('%H:%M:%S')
+    next_refresh_time = datetime.fromtimestamp(st.session_state.last_refresh + refresh_interval).strftime('%H:%M:%S')
+    
+    info_col1, info_col2 = st.columns([3, 1])
+    with info_col1:
+        st.markdown(f"""
+        <div class="auto-refresh-notice">
+            ⏱️ 自动刷新已开启 | 间隔: {refresh_interval}秒 | 上次刷新: {last_refresh_time} | 下次刷新: {next_refresh_time}
+            <span class="live-indicator">直播中</span>
+        </div>
+        """, unsafe_allow_html=True)
+    with info_col2:
+        if st.button("立即刷新", key='instant_refresh', use_container_width=True):
+            st.session_state.last_refresh = time.time()
+            st.cache_data.clear()
+            st.rerun()
 
 st.subheader(f"📅 {selected_date.strftime('%Y年%m月%d日')}")
 
@@ -472,6 +678,15 @@ if not events:
     st.info("今日无比赛")
     st.stop()
 
+# 更新直播游戏ID列表
+current_live_games = []
+for event in events:
+    status_type = event.get('status', {}).get('type', {})
+    if status_type.get('state', 'pre') == 'in':
+        current_live_games.append(event['id'])
+
+st.session_state.live_game_ids = set(current_live_games)
+
 # 并行加载球员数据
 live_or_post_event_ids = []
 for event in events:
@@ -485,6 +700,8 @@ if live_or_post_event_ids:
         player_stats_map = fetch_all_player_stats_parallel(live_or_post_event_ids)
 
 # 渲染比赛列表
+live_games_count = 0
+
 for i, event in enumerate(events):
     comp = event.get('competitions', [{}])[0]
     competitors = comp.get('competitors', [])
@@ -512,8 +729,12 @@ for i, event in enumerate(events):
     state = status_type.get('state', 'pre')
     desc = status_type.get('description', '未开始')
     
+    # 检查分数变化，用于动画
+    score_changed = check_score_changes(event['id'], away_score, home_score)
+    
     if state == 'in':
         status_badge, game_class = "🟢 直播中", "live-game"
+        live_games_count += 1
     elif state == 'post':
         status_badge, game_class = "⚫ 已结束", "finished-game"
     else:
@@ -527,22 +748,61 @@ for i, event in enumerate(events):
 
     # 比赛卡片
     game_id = event['id']
-    st.markdown(f'<div class="game-card {game_class}" id="game-{game_id}">', unsafe_allow_html=True)
+    
+    # 为直播比赛添加分数变化动画类
+    score_animation_class = "score-change" if score_changed and state == 'in' else ""
+    
+    st.markdown(f'<div class="game-card {game_class} {score_animation_class}" id="game-{game_id}">', unsafe_allow_html=True)
     
     # 比赛基本信息 - 客场队伍在左，主场队伍在右
     cols = st.columns([2, 1, 2])
     with cols[0]:
+        # 添加队伍Logo（如果可用）
+        try:
+            away_logo = away.get('team', {}).get('logo', '')
+            if away_logo:
+                st.markdown(f'<img src="{away_logo}" width="30" style="vertical-align: middle; margin-right: 5px;">', unsafe_allow_html=True)
+        except:
+            pass
+            
         st.markdown(f'<div class="team-name">{away_name}</div>', unsafe_allow_html=True)
         st.markdown(f'<span style="font-size: 24px; font-weight: bold;">{away_score}</span>', unsafe_allow_html=True)
+        
     with cols[1]:
         st.markdown("**VS**")
         st.markdown(f'<div class="game-time">{bj_time}</div>', unsafe_allow_html=True)
+        
+        # 显示直播状态标签
+        if state == 'in':
+            st.markdown(f'<span class="live-indicator">LIVE</span>', unsafe_allow_html=True)
+            
     with cols[2]:
+        # 添加队伍Logo（如果可用）
+        try:
+            home_logo = home.get('team', {}).get('logo', '')
+            if home_logo:
+                st.markdown(f'<img src="{home_logo}" width="30" style="vertical-align: middle; margin-right: 5px;">', unsafe_allow_html=True)
+        except:
+            pass
+            
         st.markdown(f'<div class="team-name">{home_name}</div>', unsafe_allow_html=True)
         st.markdown(f'<span style="font-size: 24px; font-weight: bold;">{home_score}</span>', unsafe_allow_html=True)
     
-    # 显示状态信息
-    st.markdown(f"**{status_badge} {desc}**")
+    # 显示状态信息和时钟
+    if state == 'in' and period_info and period_info['clock']:
+        clock_display = period_info['clock']
+        if clock_display and clock_display != '0:00':
+            st.markdown(f'<div class="game-clock">⏱️ {clock_display}</div>', unsafe_allow_html=True)
+    
+    # 显示状态标签
+    if state == 'in':
+        status_label = f"<span class='status-badge status-live'>{desc}</span>"
+    elif state == 'post':
+        status_label = f"<span class='status-badge status-final'>{desc}</span>"
+    else:
+        status_label = f"<span class='status-badge status-upcoming'>{desc}</span>"
+    
+    st.markdown(f"**{status_badge}** {status_label}", unsafe_allow_html=True)
     
     # 初始化折叠状态
     if game_id not in st.session_state.game_collapsed:
@@ -582,8 +842,9 @@ for i, event in enumerate(events):
                         for idx, q in enumerate(quarter_scores[:4]):  # 最多显示4节
                             col_idx = idx % num_cols
                             with quarter_cols[col_idx]:
-                                st.markdown(f"**{q['quarter']}**")
-                                st.markdown(f"**{q['away_score']}-{q['home_score']}**")
+                                # 标记当前节次
+                                current_class = "current" if q['quarter_num'] == period_info['period'] else ""
+                                st.markdown(f'<div class="quarter-box {current_class}"><strong>{q["quarter"]}</strong><br>{q["away_score"]}-{q["home_score"]}</div>', unsafe_allow_html=True)
                     
                     st.markdown(f"**当前总分: {away_name} {away_score}-{home_score} {home_name}**")
             
@@ -664,20 +925,94 @@ for i, event in enumerate(events):
     if i < len(events) - 1:
         st.divider()
 
-# 底部手动刷新按钮
+# 显示直播比赛统计
+if live_games_count > 0:
+    st.markdown(f"""
+    <div style="text-align: center; padding: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 10px; margin: 10px 0;">
+        🏀 <strong>{live_games_count} 场比赛正在直播中</strong> ⚡
+    </div>
+    """, unsafe_allow_html=True)
+
+# 底部控制栏
 st.markdown("---")
-if st.button("🔄 刷新所有数据", use_container_width=True, type="primary", key='manual_refresh_bottom'):
-    st.session_state.last_refresh = time.time()
-    st.cache_data.clear()
-    st.rerun()
+col1, col2, col3 = st.columns([1, 1, 1])
+with col1:
+    if st.button("🔄 刷新所有数据", use_container_width=True, type="primary", key='manual_refresh_bottom'):
+        st.session_state.last_refresh = time.time()
+        st.cache_data.clear()
+        st.rerun()
+        
+with col2:
+    if st.button("📊 刷新球员数据", use_container_width=True, key='refresh_players'):
+        st.session_state.last_refresh = time.time()
+        # 清除球员数据缓存
+        for key in list(st.session_state.keys()):
+            if 'cache' in key.lower():
+                del st.session_state[key]
+        st.rerun()
+
+with col3:
+    if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
+        st.rerun()
 
 # 页脚信息
 st.divider()
 footer_cols = st.columns([3, 1])
 with footer_cols[0]:
-    st.caption(f"最后更新: {datetime.now(beijing_tz).strftime('%H:%M:%S')}")
+    st.caption(f"最后更新: {datetime.now(beijing_tz).strftime('%H:%M:%S')} | 直播中比赛: {live_games_count}场")
 with footer_cols[1]:
-    if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
+    if st.button("⚙️ 设置", use_container_width=True, key='settings'):
+        st.session_state.show_settings = not st.session_state.get('show_settings', False)
+
+# ====== 自动刷新逻辑 ======
+if st.session_state.auto_refresh:
+    current_time = time.time()
+    time_since_refresh = current_time - st.session_state.last_refresh
+    
+    # 显示倒计时
+    time_remaining = max(0, st.session_state.refresh_interval - time_since_refresh)
+    
+    # 创建倒计时进度条
+    progress = time_since_refresh / st.session_state.refresh_interval
+    st.progress(progress, text=f"⏱️ 下次刷新: {int(time_remaining)}秒")
+    
+    # 检查是否需要刷新
+    if time_since_refresh > st.session_state.refresh_interval:
+        st.session_state.last_refresh = current_time
+        
+        # 如果有直播比赛，只清除相关缓存
+        if st.session_state.live_game_ids:
+            # 清除直播比赛的缓存
+            try:
+                # 清除schedule缓存
+                st.cache_data.clear()
+            except:
+                pass
+        
         st.rerun()
 
-
+# 显示设置面板（如果打开）
+if st.session_state.get('show_settings', False):
+    st.markdown("---")
+    st.subheader("⚙️ 设置")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        # 自动刷新设置
+        auto_refresh = st.checkbox("启用自动刷新", value=st.session_state.auto_refresh, key='settings_auto_refresh')
+        refresh_interval = st.slider("刷新间隔(秒)", min_value=5, max_value=120, value=st.session_state.refresh_interval, step=5)
+    
+    with col2:
+        # 显示设置
+        show_animations = st.checkbox("显示动画效果", value=True, key='show_animations')
+        highlight_live_games = st.checkbox("高亮显示直播比赛", value=True, key='highlight_live_games')
+    
+    if st.button("保存设置", type="primary"):
+        st.session_state.auto_refresh = auto_refresh
+        st.session_state.refresh_interval = refresh_interval
+        st.session_state.show_settings = False
+        st.rerun()
+    
+    if st.button("取消"):
+        st.session_state.show_settings = False
+        st.rerun()

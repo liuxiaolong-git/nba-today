@@ -5,7 +5,6 @@ import pytz
 from datetime import datetime, timedelta
 import time
 import concurrent.futures
-import asyncio
 
 # 移动端优化配置
 st.set_page_config(
@@ -174,6 +173,19 @@ st.markdown("""
         padding: 8px 12px;
         border-radius: 6px;
         border-left: 4px solid #4CAF50;
+        margin: 10px 0;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    /* 刷新倒计时 */
+    .refresh-countdown {
+        background: #e3f2fd;
+        padding: 8px 12px;
+        border-radius: 6px;
+        border-left: 4px solid #2196F3;
         margin: 10px 0;
         font-size: 13px;
         display: flex;
@@ -653,8 +665,7 @@ if auto_refresh:
     with info_col1:
         st.markdown(f"""
         <div class="auto-refresh-notice">
-            ⏱️ 自动刷新已开启 | 间隔: {refresh_interval}秒 | 上次刷新: {last_refresh_time} | 下次刷新: {next_refresh_time}
-            <span class="live-indicator">直播中</span>
+            ⏱️ 自动刷新已开启 | 间隔: {refresh_interval}秒 | 上次刷新: {last_refresh_time}
         </div>
         """, unsafe_allow_html=True)
     with info_col2:
@@ -972,9 +983,15 @@ if st.session_state.auto_refresh:
     # 显示倒计时
     time_remaining = max(0, st.session_state.refresh_interval - time_since_refresh)
     
-    # 创建倒计时进度条
-    progress = time_since_refresh / st.session_state.refresh_interval
-    st.progress(progress, text=f"⏱️ 下次刷新: {int(time_remaining)}秒")
+    # 修复：确保进度值在0.0到1.0之间
+    progress = min(1.0, max(0.0, time_since_refresh / st.session_state.refresh_interval))
+    
+    # 创建倒计时进度条（修复了进度值范围）
+    if 0.0 <= progress <= 1.0:
+        st.progress(progress, text=f"⏱️ 下次刷新: {int(time_remaining)}秒")
+    else:
+        # 如果进度值异常，显示简单的倒计时文本
+        st.markdown(f'<div class="refresh-countdown">⏱️ 下次刷新: {int(time_remaining)}秒</div>', unsafe_allow_html=True)
     
     # 检查是否需要刷新
     if time_since_refresh > st.session_state.refresh_interval:

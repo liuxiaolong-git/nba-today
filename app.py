@@ -290,7 +290,15 @@ if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = True
 
 if 'refresh_interval' not in st.session_state:
-    st.session_state.refresh_interval = 30  # 默认30秒刷新
+    st.session_state.refresh_interval = 10  # 默认10秒刷新（针对比分）
+
+# 添加刷新计数器
+if 'refresh_count' not in st.session_state:
+    st.session_state.refresh_count = 0
+
+# 添加缓存键
+if 'schedule_cache_key' not in st.session_state:
+    st.session_state.schedule_cache_key = f"schedule_{time.time()}"
 
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
@@ -331,31 +339,27 @@ def translate_player_name(name):
     return name
 
 # ====== API 数据获取函数 ======
-@st.cache_data(ttl=15, show_spinner=False)  # 缩短缓存时间到15秒，加快直播更新
-def fetch_nba_schedule(date_str):
-    try:
-        eastern = pytz.timezone('America/New_York')
-        beijing_dt = beijing_tz.localize(datetime.strptime(date_str, '%Y-%m-%d'))
-        eastern_dt = beijing_dt.astimezone(eastern)
-        url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
-        params = {'dates': eastern_dt.strftime('%Y%m%d'), 'lang': 'zh', 'region': 'cn'}
-        resp = requests.get(url, params=params, timeout=5)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception:
-        return None
-
-# 直播比赛专用函数，缓存时间更短
-@st.cache_data(ttl=10, show_spinner=False)  # 直播比赛10秒缓存
-def fetch_live_game_data(event_id):
-    try:
-        url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
-        resp = requests.get(url, params={'event': event_id}, timeout=3)
-        if resp.status_code == 200:
+# 为了实时刷新比分，我们使用自定义缓存键来强制刷新
+def fetch_nba_schedule_with_cache(date_str, force_refresh=False):
+    """带缓存控制的赛程数据获取"""
+    # 如果强制刷新或缓存键变化，清除缓存
+    cache_key = f"schedule_{date_str}_{st.session_state.schedule_cache_key}"
+    
+    @st.cache_data(ttl=5, show_spinner=False)  # 比分数据缓存5秒
+    def _fetch_schedule(_date_str):
+        try:
+            eastern = pytz.timezone('America/New_York')
+            beijing_dt = beijing_tz.localize(datetime.strptime(_date_str, '%Y-%m-%d'))
+            eastern_dt = beijing_dt.astimezone(eastern)
+            url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+            params = {'dates': eastern_dt.strftime('%Y%m%d'), 'lang': 'zh', 'region': 'cn'}
+            resp = requests.get(url, params=params, timeout=5)
+            resp.raise_for_status()
             return resp.json()
-    except Exception:
-        pass
-    return None
+        except Exception as e:
+            return None
+    
+    return _fetch_schedule(date_str)
 
 def fetch_single_player_stats(event_id):
     try:
@@ -639,8 +643,8 @@ with col3:
     # 刷新间隔选择
     refresh_interval = st.selectbox(
         "刷新间隔",
-        options=[10, 15, 30, 60],
-        index=2,
+        options=[5, 10, 15, 30],
+        index=1,  # 默认10秒
         key='refresh_interval_select',
         label_visibility="collapsed"
     )
@@ -649,7 +653,8 @@ with col4:
     manual_refresh = st.button("🔄 刷新数据", use_container_width=True, key='manual_refresh_top', type="primary")
     if manual_refresh:
         st.session_state.last_refresh = time.time()
-        st.cache_data.clear()
+        st.session_state.schedule_cache_key = f"schedule_{time.time()}"  # 更新缓存键强制刷新
+        st.session_state.refresh_count += 1
         st.rerun()
 
 # 更新session状态
@@ -659,26 +664,26 @@ st.session_state.refresh_interval = refresh_interval
 # 显示自动刷新状态
 if auto_refresh:
     last_refresh_time = datetime.fromtimestamp(st.session_state.last_refresh).strftime('%H:%M:%S')
-    next_refresh_time = datetime.fromtimestamp(st.session_state.last_refresh + refresh_interval).strftime('%H:%M:%S')
     
     info_col1, info_col2 = st.columns([3, 1])
     with info_col1:
         st.markdown(f"""
         <div class="auto-refresh-notice">
-            ⏱️ 自动刷新已开启 | 间隔: {refresh_interval}秒 | 上次刷新: {last_refresh_time}
+            ⏱️ 自动刷新已开启 | 间隔: {refresh_interval}秒 | 上次刷新: {last_refresh_time} | 刷新次数: {st.session_state.refresh_count}
         </div>
         """, unsafe_allow_html=True)
     with info_col2:
         if st.button("立即刷新", key='instant_refresh', use_container_width=True):
             st.session_state.last_refresh = time.time()
-            st.cache_data.clear()
+            st.session_state.schedule_cache_key = f"schedule_{time.time()}"  # 更新缓存键强制刷新
+            st.session_state.refresh_count += 1
             st.rerun()
 
 st.subheader(f"📅 {selected_date.strftime('%Y年%m月%d日')}")
 
 # 加载主赛程数据
 with st.spinner("加载赛程数据..."):
-    schedule = fetch_nba_schedule(selected_date.strftime('%Y-%m-%d'))
+    schedule = fetch_nba_schedule_with_cache(selected_date.strftime('%Y-%m-%d'))
 
 if not schedule or 'events' not in schedule:
     st.error("无法获取数据，请稍后重试")
@@ -821,7 +826,7 @@ for i, event in enumerate(events):
     
     # 折叠/展开按钮
     toggle_label = "📖 展开详情" if st.session_state.game_collapsed[game_id] else "📕 折叠详情"
-    if st.button(toggle_label, key=f"toggle_{game_id}", use_container_width=True):
+    if st.button(toggle_label, key=f"toggle_{game_id}_{st.session_state.refresh_count}", use_container_width=True):
         st.session_state.game_collapsed[game_id] = not st.session_state.game_collapsed[game_id]
         st.rerun()
     
@@ -905,7 +910,7 @@ for i, event in enumerate(events):
                             display_simple_table(away_p, away_name)
                             col_btn1, _ = st.columns([1, 1])
                             with col_btn1:
-                                if st.button("📊 详细数据", key=f"expand_away_{event['id']}", 
+                                if st.button("📊 详细数据", key=f"expand_away_{event['id']}_{st.session_state.refresh_count}", 
                                           use_container_width=True, 
                                           type="secondary" if not st.session_state.expanded_games[game_key]['away_expanded'] else "primary"):
                                     st.session_state.expanded_games[game_key]['away_expanded'] = not st.session_state.expanded_games[game_key]['away_expanded']
@@ -921,7 +926,7 @@ for i, event in enumerate(events):
                             display_simple_table(home_p, home_name)
                             col_btn1, _ = st.columns([1, 1])
                             with col_btn1:
-                                if st.button("📊 详细数据", key=f"expand_home_{event['id']}", 
+                                if st.button("📊 详细数据", key=f"expand_home_{event['id']}_{st.session_state.refresh_count}", 
                                           use_container_width=True, 
                                           type="secondary" if not st.session_state.expanded_games[game_key]['home_expanded'] else "primary"):
                                     st.session_state.expanded_games[game_key]['home_expanded'] = not st.session_state.expanded_games[game_key]['home_expanded']
@@ -950,16 +955,15 @@ col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
     if st.button("🔄 刷新所有数据", use_container_width=True, type="primary", key='manual_refresh_bottom'):
         st.session_state.last_refresh = time.time()
-        st.cache_data.clear()
+        st.session_state.schedule_cache_key = f"schedule_{time.time()}"  # 更新缓存键强制刷新
+        st.session_state.refresh_count += 1
         st.rerun()
         
 with col2:
     if st.button("📊 刷新球员数据", use_container_width=True, key='refresh_players'):
         st.session_state.last_refresh = time.time()
-        # 清除球员数据缓存
-        for key in list(st.session_state.keys()):
-            if 'cache' in key.lower():
-                del st.session_state[key]
+        st.session_state.schedule_cache_key = f"schedule_{time.time()}"  # 更新缓存键强制刷新
+        st.session_state.refresh_count += 1
         st.rerun()
 
 with col3:
@@ -970,7 +974,7 @@ with col3:
 st.divider()
 footer_cols = st.columns([3, 1])
 with footer_cols[0]:
-    st.caption(f"最后更新: {datetime.now(beijing_tz).strftime('%H:%M:%S')} | 直播中比赛: {live_games_count}场")
+    st.caption(f"最后更新: {datetime.now(beijing_tz).strftime('%H:%M:%S')} | 直播中比赛: {live_games_count}场 | 刷新次数: {st.session_state.refresh_count}")
 with footer_cols[1]:
     if st.button("⚙️ 设置", use_container_width=True, key='settings'):
         st.session_state.show_settings = not st.session_state.get('show_settings', False)
@@ -996,16 +1000,10 @@ if st.session_state.auto_refresh:
     # 检查是否需要刷新
     if time_since_refresh > st.session_state.refresh_interval:
         st.session_state.last_refresh = current_time
+        st.session_state.schedule_cache_key = f"schedule_{time.time()}"  # 更新缓存键强制刷新
+        st.session_state.refresh_count += 1
         
-        # 如果有直播比赛，只清除相关缓存
-        if st.session_state.live_game_ids:
-            # 清除直播比赛的缓存
-            try:
-                # 清除schedule缓存
-                st.cache_data.clear()
-            except:
-                pass
-        
+        # 强制刷新页面
         st.rerun()
 
 # 显示设置面板（如果打开）
@@ -1017,7 +1015,7 @@ if st.session_state.get('show_settings', False):
     with col1:
         # 自动刷新设置
         auto_refresh = st.checkbox("启用自动刷新", value=st.session_state.auto_refresh, key='settings_auto_refresh')
-        refresh_interval = st.slider("刷新间隔(秒)", min_value=5, max_value=120, value=st.session_state.refresh_interval, step=5)
+        refresh_interval = st.slider("刷新间隔(秒)", min_value=5, max_value=60, value=st.session_state.refresh_interval, step=5)
     
     with col2:
         # 显示设置

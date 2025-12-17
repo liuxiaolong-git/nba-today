@@ -274,13 +274,6 @@ if 'game_period_info' not in st.session_state:
 if 'game_collapsed' not in st.session_state:
     st.session_state.game_collapsed = {}
 
-if 'last_refresh' not in st.session_state:
-    st.session_state.last_refresh = time.time()
-
-# 添加直播游戏ID存储
-if 'live_game_ids' not in st.session_state:
-    st.session_state.live_game_ids = set()
-
 # 添加分数缓存用于检测变化
 if 'score_cache' not in st.session_state:
     st.session_state.score_cache = {}
@@ -290,15 +283,22 @@ if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = True
 
 if 'refresh_interval' not in st.session_state:
-    st.session_state.refresh_interval = 10  # 默认10秒刷新（针对比分）
+    st.session_state.refresh_interval = 5  # 默认5秒刷新
 
-# 添加刷新计数器
+# 添加刷新状态
+if 'last_refresh' not in st.session_state:
+    st.session_state.last_refresh = time.time()
+
 if 'refresh_count' not in st.session_state:
     st.session_state.refresh_count = 0
 
-# 添加缓存键
-if 'schedule_cache_key' not in st.session_state:
-    st.session_state.schedule_cache_key = f"schedule_{time.time()}"
+# 添加强制刷新标志
+if 'force_refresh' not in st.session_state:
+    st.session_state.force_refresh = False
+
+# 添加缓存版本控制
+if 'cache_version' not in st.session_state:
+    st.session_state.cache_version = 1
 
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
@@ -339,29 +339,28 @@ def translate_player_name(name):
     return name
 
 # ====== API 数据获取函数 ======
-# 为了实时刷新比分，我们使用自定义缓存键来强制刷新
-def fetch_nba_schedule_with_cache(date_str, force_refresh=False):
-    """带缓存控制的赛程数据获取"""
-    # 如果强制刷新或缓存键变化，清除缓存
-    cache_key = f"schedule_{date_str}_{st.session_state.schedule_cache_key}"
-    
-    @st.cache_data(ttl=5, show_spinner=False)  # 比分数据缓存5秒
-    def _fetch_schedule(_date_str):
-        try:
-            eastern = pytz.timezone('America/New_York')
-            beijing_dt = beijing_tz.localize(datetime.strptime(_date_str, '%Y-%m-%d'))
-            eastern_dt = beijing_dt.astimezone(eastern)
-            url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
-            params = {'dates': eastern_dt.strftime('%Y%m%d'), 'lang': 'zh', 'region': 'cn'}
-            resp = requests.get(url, params=params, timeout=5)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            return None
-    
-    return _fetch_schedule(date_str)
+# 主要问题：使用缓存版本控制来确保比分数据也能刷新
+def get_cache_key(date_str):
+    """生成包含版本控制的缓存键"""
+    return f"nba_schedule_{date_str}_v{st.session_state.cache_version}"
 
-def fetch_single_player_stats(event_id):
+@st.cache_data(ttl=3, show_spinner=False)  # 比分数据缓存3秒（非常短）
+def fetch_nba_schedule(date_str, cache_version_key):
+    """获取NBA赛程数据，使用版本控制确保刷新"""
+    try:
+        eastern = pytz.timezone('America/New_York')
+        beijing_dt = beijing_tz.localize(datetime.strptime(date_str, '%Y-%m-%d'))
+        eastern_dt = beijing_dt.astimezone(eastern)
+        url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+        params = {'dates': eastern_dt.strftime('%Y%m%d'), 'lang': 'zh', 'region': 'cn'}
+        resp = requests.get(url, params=params, timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return None
+
+def fetch_single_player_stats(event_id, cache_version_key):
+    """获取单个比赛的球员数据"""
     try:
         url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
         resp = requests.get(url, params={'event': event_id}, timeout=3)
@@ -373,11 +372,13 @@ def fetch_single_player_stats(event_id):
         pass
     return event_id, None
 
-def fetch_all_player_stats_parallel(event_ids):
+@st.cache_data(ttl=3, show_spinner=False)  # 球员数据也缓存3秒
+def fetch_all_player_stats_parallel(event_ids, cache_version_key):
+    """并行获取所有球员数据"""
     player_stats_map = {}
     if event_ids:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(event_ids))) as executor:
-            future_to_id = {executor.submit(fetch_single_player_stats, eid): eid for eid in event_ids}
+            future_to_id = {executor.submit(fetch_single_player_stats, eid, cache_version_key): eid for eid in event_ids}
             for future in concurrent.futures.as_completed(future_to_id):
                 event_id, data = future.result()
                 if data:
@@ -644,7 +645,7 @@ with col3:
     refresh_interval = st.selectbox(
         "刷新间隔",
         options=[5, 10, 15, 30],
-        index=1,  # 默认10秒
+        index=0,  # 默认5秒
         key='refresh_interval_select',
         label_visibility="collapsed"
     )
@@ -653,8 +654,9 @@ with col4:
     manual_refresh = st.button("🔄 刷新数据", use_container_width=True, key='manual_refresh_top', type="primary")
     if manual_refresh:
         st.session_state.last_refresh = time.time()
-        st.session_state.schedule_cache_key = f"schedule_{time.time()}"  # 更新缓存键强制刷新
+        st.session_state.cache_version += 1  # 增加缓存版本
         st.session_state.refresh_count += 1
+        st.session_state.force_refresh = True
         st.rerun()
 
 # 更新session状态
@@ -664,6 +666,9 @@ st.session_state.refresh_interval = refresh_interval
 # 显示自动刷新状态
 if auto_refresh:
     last_refresh_time = datetime.fromtimestamp(st.session_state.last_refresh).strftime('%H:%M:%S')
+    current_time = time.time()
+    time_since_refresh = current_time - st.session_state.last_refresh
+    time_remaining = max(0, refresh_interval - time_since_refresh)
     
     info_col1, info_col2 = st.columns([3, 1])
     with info_col1:
@@ -675,15 +680,19 @@ if auto_refresh:
     with info_col2:
         if st.button("立即刷新", key='instant_refresh', use_container_width=True):
             st.session_state.last_refresh = time.time()
-            st.session_state.schedule_cache_key = f"schedule_{time.time()}"  # 更新缓存键强制刷新
+            st.session_state.cache_version += 1  # 增加缓存版本
             st.session_state.refresh_count += 1
+            st.session_state.force_refresh = True
             st.rerun()
 
 st.subheader(f"📅 {selected_date.strftime('%Y年%m月%d日')}")
 
+# 生成缓存键
+cache_key = get_cache_key(selected_date.strftime('%Y-%m-%d'))
+
 # 加载主赛程数据
 with st.spinner("加载赛程数据..."):
-    schedule = fetch_nba_schedule_with_cache(selected_date.strftime('%Y-%m-%d'))
+    schedule = fetch_nba_schedule(selected_date.strftime('%Y-%m-%d'), cache_key)
 
 if not schedule or 'events' not in schedule:
     st.error("无法获取数据，请稍后重试")
@@ -701,8 +710,6 @@ for event in events:
     if status_type.get('state', 'pre') == 'in':
         current_live_games.append(event['id'])
 
-st.session_state.live_game_ids = set(current_live_games)
-
 # 并行加载球员数据
 live_or_post_event_ids = []
 for event in events:
@@ -713,7 +720,7 @@ for event in events:
 player_stats_map = {}
 if live_or_post_event_ids:
     with st.spinner("加载球员数据..."):
-        player_stats_map = fetch_all_player_stats_parallel(live_or_post_event_ids)
+        player_stats_map = fetch_all_player_stats_parallel(live_or_post_event_ids, cache_key)
 
 # 渲染比赛列表
 live_games_count = 0
@@ -955,15 +962,17 @@ col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
     if st.button("🔄 刷新所有数据", use_container_width=True, type="primary", key='manual_refresh_bottom'):
         st.session_state.last_refresh = time.time()
-        st.session_state.schedule_cache_key = f"schedule_{time.time()}"  # 更新缓存键强制刷新
+        st.session_state.cache_version += 1  # 增加缓存版本
         st.session_state.refresh_count += 1
+        st.session_state.force_refresh = True
         st.rerun()
         
 with col2:
     if st.button("📊 刷新球员数据", use_container_width=True, key='refresh_players'):
         st.session_state.last_refresh = time.time()
-        st.session_state.schedule_cache_key = f"schedule_{time.time()}"  # 更新缓存键强制刷新
+        st.session_state.cache_version += 1  # 增加缓存版本
         st.session_state.refresh_count += 1
+        st.session_state.force_refresh = True
         st.rerun()
 
 with col3:
@@ -990,7 +999,7 @@ if st.session_state.auto_refresh:
     # 修复：确保进度值在0.0到1.0之间
     progress = min(1.0, max(0.0, time_since_refresh / st.session_state.refresh_interval))
     
-    # 创建倒计时进度条（修复了进度值范围）
+    # 创建倒计时进度条
     if 0.0 <= progress <= 1.0:
         st.progress(progress, text=f"⏱️ 下次刷新: {int(time_remaining)}秒")
     else:
@@ -1000,8 +1009,11 @@ if st.session_state.auto_refresh:
     # 检查是否需要刷新
     if time_since_refresh > st.session_state.refresh_interval:
         st.session_state.last_refresh = current_time
-        st.session_state.schedule_cache_key = f"schedule_{time.time()}"  # 更新缓存键强制刷新
+        st.session_state.cache_version += 1  # 增加缓存版本，强制所有缓存失效
         st.session_state.refresh_count += 1
+        
+        # 显示刷新提示
+        st.toast(f"🔄 自动刷新中... 刷新次数: {st.session_state.refresh_count}", icon="🔄")
         
         # 强制刷新页面
         st.rerun()
@@ -1015,7 +1027,7 @@ if st.session_state.get('show_settings', False):
     with col1:
         # 自动刷新设置
         auto_refresh = st.checkbox("启用自动刷新", value=st.session_state.auto_refresh, key='settings_auto_refresh')
-        refresh_interval = st.slider("刷新间隔(秒)", min_value=5, max_value=60, value=st.session_state.refresh_interval, step=5)
+        refresh_interval = st.slider("刷新间隔(秒)", min_value=2, max_value=60, value=st.session_state.refresh_interval, step=1)
     
     with col2:
         # 显示设置

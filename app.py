@@ -270,11 +270,9 @@ if 'expanded_games' not in st.session_state:
 if 'game_period_info' not in st.session_state:
     st.session_state.game_period_info = {}
 
-# 添加折叠状态存储
 if 'game_collapsed' not in st.session_state:
     st.session_state.game_collapsed = {}
 
-# 添加分数缓存用于检测变化
 if 'score_cache' not in st.session_state:
     st.session_state.score_cache = {}
 
@@ -285,20 +283,11 @@ if 'auto_refresh' not in st.session_state:
 if 'refresh_interval' not in st.session_state:
     st.session_state.refresh_interval = 5  # 默认5秒刷新
 
-# 添加刷新状态
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = time.time()
 
 if 'refresh_count' not in st.session_state:
     st.session_state.refresh_count = 0
-
-# 添加强制刷新标志
-if 'force_refresh' not in st.session_state:
-    st.session_state.force_refresh = False
-
-# 添加缓存版本控制
-if 'cache_version' not in st.session_state:
-    st.session_state.cache_version = 1
 
 beijing_tz = pytz.timezone('Asia/Shanghai')
 now_beijing = datetime.now(beijing_tz)
@@ -339,14 +328,19 @@ def translate_player_name(name):
     return name
 
 # ====== API 数据获取函数 ======
-# 主要问题：使用缓存版本控制来确保比分数据也能刷新
-def get_cache_key(date_str):
-    """生成包含版本控制的缓存键"""
-    return f"nba_schedule_{date_str}_v{st.session_state.cache_version}"
+def manual_refresh_action():
+    """手动刷新时执行的操作"""
+    st.session_state.last_refresh = time.time()
+    st.session_state.refresh_count += 1
+    # 清除所有缓存
+    st.cache_data.clear()
+    # 清除分数缓存
+    st.session_state.score_cache = {}
+    st.rerun()
 
-@st.cache_data(ttl=3, show_spinner=False)  # 比分数据缓存3秒（非常短）
-def fetch_nba_schedule(date_str, cache_version_key):
-    """获取NBA赛程数据，使用版本控制确保刷新"""
+# 简化的数据获取函数，不依赖复杂缓存
+def fetch_nba_schedule_simple(date_str):
+    """简化的赛程数据获取，不依赖复杂缓存"""
     try:
         eastern = pytz.timezone('America/New_York')
         beijing_dt = beijing_tz.localize(datetime.strptime(date_str, '%Y-%m-%d'))
@@ -359,8 +353,7 @@ def fetch_nba_schedule(date_str, cache_version_key):
     except Exception as e:
         return None
 
-def fetch_single_player_stats(event_id, cache_version_key):
-    """获取单个比赛的球员数据"""
+def fetch_single_player_stats(event_id):
     try:
         url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
         resp = requests.get(url, params={'event': event_id}, timeout=3)
@@ -372,13 +365,11 @@ def fetch_single_player_stats(event_id, cache_version_key):
         pass
     return event_id, None
 
-@st.cache_data(ttl=3, show_spinner=False)  # 球员数据也缓存3秒
-def fetch_all_player_stats_parallel(event_ids, cache_version_key):
-    """并行获取所有球员数据"""
+def fetch_all_player_stats_parallel_simple(event_ids):
     player_stats_map = {}
     if event_ids:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(event_ids))) as executor:
-            future_to_id = {executor.submit(fetch_single_player_stats, eid, cache_version_key): eid for eid in event_ids}
+            future_to_id = {executor.submit(fetch_single_player_stats, eid): eid for eid in event_ids}
             for future in concurrent.futures.as_completed(future_to_id):
                 event_id, data = future.result()
                 if data:
@@ -484,7 +475,7 @@ def get_game_period_info(event):
     except Exception as e:
         return None
 
-# ====== 自动刷新逻辑 ======
+# ====== 检查分数变化 ======
 def check_score_changes(event_id, away_score, home_score):
     """检查分数是否发生变化，用于动画效果"""
     cache_key = f"{event_id}_scores"
@@ -653,11 +644,7 @@ with col3:
 with col4:
     manual_refresh = st.button("🔄 刷新数据", use_container_width=True, key='manual_refresh_top', type="primary")
     if manual_refresh:
-        st.session_state.last_refresh = time.time()
-        st.session_state.cache_version += 1  # 增加缓存版本
-        st.session_state.refresh_count += 1
-        st.session_state.force_refresh = True
-        st.rerun()
+        manual_refresh_action()
 
 # 更新session状态
 st.session_state.auto_refresh = auto_refresh
@@ -670,29 +657,22 @@ if auto_refresh:
     time_since_refresh = current_time - st.session_state.last_refresh
     time_remaining = max(0, refresh_interval - time_since_refresh)
     
-    info_col1, info_col2 = st.columns([3, 1])
-    with info_col1:
+    info_cols = st.columns([4, 1])
+    with info_cols[0]:
         st.markdown(f"""
         <div class="auto-refresh-notice">
             ⏱️ 自动刷新已开启 | 间隔: {refresh_interval}秒 | 上次刷新: {last_refresh_time} | 刷新次数: {st.session_state.refresh_count}
         </div>
         """, unsafe_allow_html=True)
-    with info_col2:
+    with info_cols[1]:
         if st.button("立即刷新", key='instant_refresh', use_container_width=True):
-            st.session_state.last_refresh = time.time()
-            st.session_state.cache_version += 1  # 增加缓存版本
-            st.session_state.refresh_count += 1
-            st.session_state.force_refresh = True
-            st.rerun()
+            manual_refresh_action()
 
 st.subheader(f"📅 {selected_date.strftime('%Y年%m月%d日')}")
 
-# 生成缓存键
-cache_key = get_cache_key(selected_date.strftime('%Y-%m-%d'))
-
 # 加载主赛程数据
 with st.spinner("加载赛程数据..."):
-    schedule = fetch_nba_schedule(selected_date.strftime('%Y-%m-%d'), cache_key)
+    schedule = fetch_nba_schedule_simple(selected_date.strftime('%Y-%m-%d'))
 
 if not schedule or 'events' not in schedule:
     st.error("无法获取数据，请稍后重试")
@@ -702,13 +682,6 @@ events = schedule['events']
 if not events:
     st.info("今日无比赛")
     st.stop()
-
-# 更新直播游戏ID列表
-current_live_games = []
-for event in events:
-    status_type = event.get('status', {}).get('type', {})
-    if status_type.get('state', 'pre') == 'in':
-        current_live_games.append(event['id'])
 
 # 并行加载球员数据
 live_or_post_event_ids = []
@@ -720,7 +693,7 @@ for event in events:
 player_stats_map = {}
 if live_or_post_event_ids:
     with st.spinner("加载球员数据..."):
-        player_stats_map = fetch_all_player_stats_parallel(live_or_post_event_ids, cache_key)
+        player_stats_map = fetch_all_player_stats_parallel_simple(live_or_post_event_ids)
 
 # 渲染比赛列表
 live_games_count = 0
@@ -739,12 +712,10 @@ for i, event in enumerate(events):
     # 获取节次信息
     period_info = get_game_period_info(event)
     if period_info:
-        # 这里已经修正了，away_score对应客场队伍，home_score对应主场队伍
         away_score = period_info['away_score']
         home_score = period_info['home_score']
         st.session_state.game_period_info[event['id']] = period_info
     else:
-        # 如果无法获取节次信息，直接从数据获取比分
         away_score = away.get('score', '0')
         home_score = home.get('score', '0')
 
@@ -780,7 +751,6 @@ for i, event in enumerate(events):
     # 比赛基本信息 - 客场队伍在左，主场队伍在右
     cols = st.columns([2, 1, 2])
     with cols[0]:
-        # 添加队伍Logo（如果可用）
         try:
             away_logo = away.get('team', {}).get('logo', '')
             if away_logo:
@@ -795,12 +765,10 @@ for i, event in enumerate(events):
         st.markdown("**VS**")
         st.markdown(f'<div class="game-time">{bj_time}</div>', unsafe_allow_html=True)
         
-        # 显示直播状态标签
         if state == 'in':
             st.markdown(f'<span class="live-indicator">LIVE</span>', unsafe_allow_html=True)
             
     with cols[2]:
-        # 添加队伍Logo（如果可用）
         try:
             home_logo = home.get('team', {}).get('logo', '')
             if home_logo:
@@ -854,7 +822,6 @@ for i, event in enumerate(events):
                 if period_info['quarter_scores']:
                     st.markdown("**每节比分:**")
                     
-                    # 使用st.columns显示
                     quarter_scores = period_info['quarter_scores']
                     num_quarters = len(quarter_scores)
                     num_cols = min(4, num_quarters)
@@ -862,10 +829,9 @@ for i, event in enumerate(events):
                     if num_cols > 0:
                         quarter_cols = st.columns(num_cols)
                         
-                        for idx, q in enumerate(quarter_scores[:4]):  # 最多显示4节
+                        for idx, q in enumerate(quarter_scores[:4]):
                             col_idx = idx % num_cols
                             with quarter_cols[col_idx]:
-                                # 标记当前节次
                                 current_class = "current" if q['quarter_num'] == period_info['period'] else ""
                                 st.markdown(f'<div class="quarter-box {current_class}"><strong>{q["quarter"]}</strong><br>{q["away_score"]}-{q["home_score"]}</div>', unsafe_allow_html=True)
                     
@@ -882,7 +848,6 @@ for i, event in enumerate(events):
                     quarter_scores = period_info['quarter_scores']
                     num_quarters = len(quarter_scores)
                     
-                    # 分多行显示
                     for row_start in range(0, num_quarters, 4):
                         row_end = min(row_start + 4, num_quarters)
                         if row_start < row_end:
@@ -961,19 +926,11 @@ st.markdown("---")
 col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
     if st.button("🔄 刷新所有数据", use_container_width=True, type="primary", key='manual_refresh_bottom'):
-        st.session_state.last_refresh = time.time()
-        st.session_state.cache_version += 1  # 增加缓存版本
-        st.session_state.refresh_count += 1
-        st.session_state.force_refresh = True
-        st.rerun()
+        manual_refresh_action()
         
 with col2:
     if st.button("📊 刷新球员数据", use_container_width=True, key='refresh_players'):
-        st.session_state.last_refresh = time.time()
-        st.session_state.cache_version += 1  # 增加缓存版本
-        st.session_state.refresh_count += 1
-        st.session_state.force_refresh = True
-        st.rerun()
+        manual_refresh_action()
 
 with col3:
     if st.button("⬆️ 返回顶部", use_container_width=True, key='back_to_top'):
@@ -988,7 +945,7 @@ with footer_cols[1]:
     if st.button("⚙️ 设置", use_container_width=True, key='settings'):
         st.session_state.show_settings = not st.session_state.get('show_settings', False)
 
-# ====== 自动刷新逻辑 ======
+# ====== 简单直接的自动刷新逻辑 ======
 if st.session_state.auto_refresh:
     current_time = time.time()
     time_since_refresh = current_time - st.session_state.last_refresh
@@ -996,27 +953,20 @@ if st.session_state.auto_refresh:
     # 显示倒计时
     time_remaining = max(0, st.session_state.refresh_interval - time_since_refresh)
     
-    # 修复：确保进度值在0.0到1.0之间
+    # 创建倒计时进度条
     progress = min(1.0, max(0.0, time_since_refresh / st.session_state.refresh_interval))
     
-    # 创建倒计时进度条
     if 0.0 <= progress <= 1.0:
         st.progress(progress, text=f"⏱️ 下次刷新: {int(time_remaining)}秒")
     else:
-        # 如果进度值异常，显示简单的倒计时文本
         st.markdown(f'<div class="refresh-countdown">⏱️ 下次刷新: {int(time_remaining)}秒</div>', unsafe_allow_html=True)
     
-    # 检查是否需要刷新
+    # 简单直接的自动刷新：时间到了就直接调用手动刷新逻辑
     if time_since_refresh > st.session_state.refresh_interval:
-        st.session_state.last_refresh = current_time
-        st.session_state.cache_version += 1  # 增加缓存版本，强制所有缓存失效
-        st.session_state.refresh_count += 1
-        
         # 显示刷新提示
-        st.toast(f"🔄 自动刷新中... 刷新次数: {st.session_state.refresh_count}", icon="🔄")
-        
-        # 强制刷新页面
-        st.rerun()
+        st.toast(f"🔄 自动刷新中...", icon="🔄")
+        # 直接调用手动刷新逻辑
+        manual_refresh_action()
 
 # 显示设置面板（如果打开）
 if st.session_state.get('show_settings', False):
@@ -1025,12 +975,10 @@ if st.session_state.get('show_settings', False):
     
     col1, col2 = st.columns(2)
     with col1:
-        # 自动刷新设置
         auto_refresh = st.checkbox("启用自动刷新", value=st.session_state.auto_refresh, key='settings_auto_refresh')
         refresh_interval = st.slider("刷新间隔(秒)", min_value=2, max_value=60, value=st.session_state.refresh_interval, step=1)
     
     with col2:
-        # 显示设置
         show_animations = st.checkbox("显示动画效果", value=True, key='show_animations')
         highlight_live_games = st.checkbox("高亮显示直播比赛", value=True, key='highlight_live_games')
     
